@@ -14,6 +14,9 @@ var commands = []struct{ name, description string }{
 	{"servers", "서버 목록으로 이동"},
 	{"send", "작성 중인 메시지 전송 (채팅 화면에서 사용)"},
 	{"older", "이전 메시지 불러오기 (채팅 화면에서 사용)"},
+	{"sync", "현재 채널 기록 다시 동기화 (연결된 채팅 화면에서 사용)"},
+	{"layout", "plain/log/editor 형식 순환 또는 :layout 형식명으로 선택 (자동 저장)"},
+	{"config", "설정 화면 열기 · j/k 이동 · h/l 변경 · Ctrl-S 저장 · Esc 취소"},
 	{"q", "프로그램 종료"},
 	{"quit", "프로그램 종료 (:q와 동일)"},
 }
@@ -21,9 +24,19 @@ var commands = []struct{ name, description string }{
 func (m *model) completeCommand(direction int) {
 	if len(m.completions) == 0 {
 		prefix := strings.TrimSpace(m.command.value())
-		for _, command := range commands {
-			if strings.HasPrefix(command.name, prefix) {
-				m.completions = append(m.completions, command.name)
+		if strings.HasPrefix(m.command.value(), "layout ") {
+			for _, style := range layoutStyles {
+				candidate := "layout " + style
+				if strings.HasPrefix(candidate, prefix) {
+					m.completions = append(m.completions, candidate)
+				}
+			}
+		}
+		if !strings.HasPrefix(m.command.value(), "layout ") {
+			for _, command := range commands {
+				if strings.HasPrefix(command.name, prefix) {
+					m.completions = append(m.completions, command.name)
+				}
 			}
 		}
 		if len(m.completions) == 0 {

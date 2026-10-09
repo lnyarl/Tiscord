@@ -5,11 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 	"unicode/utf16"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -19,6 +20,7 @@ type loaded struct {
 	channels        []channel
 	messages        []message
 	err             error
+	epoch           uint64
 }
 type sent struct {
 	message message
@@ -26,6 +28,12 @@ type sent struct {
 }
 type streamClosed struct{}
 type model struct {
+	showConfig                                           bool
+	configDraft                                          config
+	configIndex                                          int
+	configStatus                                         string
+	logLevel                                             *slog.LevelVar
+	configPath                                           string
 	ctx                                                  context.Context
 	client                                               chatClient
 	gateway                                              *gateway
@@ -41,13 +49,21 @@ type model struct {
 	historyEnd                                           bool
 	prefix                                               string
 	pending                                              []gatewayEvent
-	refreshWanted                                        bool
+	syncRequired                                         bool
+	gatewayOnline                                        bool
+	gatewayStopped                                       bool
+	hadConnection                                        bool
+	connectionEpoch                                      uint64
 	watchReady                                           <-chan struct{}
 	config                                               config
 	showHelp                                             bool
 	helpLine                                             int
 	completions                                          []string
 	completionIndex                                      int
+	selfUserID                                           string
+	typists                                              map[string]typist
+	lastChannels                                         *channelListState
+	lastChat                                             *chatState
 }
 
 func newModel(ctx context.Context, client chatClient, g *gateway) *model {
@@ -55,7 +71,7 @@ func newModel(ctx context.Context, client chatClient, g *gateway) *model {
 	if g != nil {
 		connection = "Gateway connecting"
 	}
-	return &model{ctx: ctx, client: client, gateway: g, screen: "servers", mode: "NORMAL", status: "Loading", connection: connection, busy: "servers", width: 80, height: 24, drafts: map[string]editor{}, config: defaultConfig()}
+	return &model{ctx: ctx, client: client, gateway: g, screen: "servers", mode: "NORMAL", status: "Loading", connection: connection, busy: "servers", width: 80, height: 24, drafts: map[string]editor{}, config: defaultConfig(), typists: map[string]typist{}, gatewayOnline: g == nil}
 }
 func (m *model) Init() tea.Cmd {
 	load := func() tea.Msg {
@@ -109,22 +125,63 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}()
 	appLog.Debug("ui.event", "type", fmt.Sprintf("%T", msg), "screen", m.screen, "busy", m.busy)
 	switch msg := msg.(type) {
+	case typingExpired:
+		if person, ok := m.typists[msg.userID]; ok && m.channel.ID == msg.channelID && person.expires.Equal(msg.expires) {
+			delete(m.typists, msg.userID)
+			appLog.Debug("ui.typing_expired", "user_id", msg.userID)
+		}
 	case tea.WindowSizeMsg:
 		m.width = max(1, msg.Width)
 		m.height = max(4, msg.Height)
+	case tea.KeyboardEnhancementsMsg:
+		appLog.Info("keyboard.capabilities", "alternate_keys", msg.SupportsAlternateKeys(), "all_keys", msg.SupportsAllKeysAsEscapeCodes(), "associated_text", msg.SupportsAssociatedText())
+	case tea.PasteMsg:
+		if m.showConfig {
+			break
+		}
+		if m.entry != "" {
+			m.command.insert([]rune(singleLine(msg.Content)))
+			m.completions = nil
+		} else if m.mode == "INSERT" && m.screen == "chat" && m.busy != "send" && !m.showHelp {
+			m.draft.insert([]rune(clean(msg.Content)))
+		}
 	case streamClosed: // A terminal Gateway failure remains visible; there is no polling fallback.
+		m.connection = "Gateway stopped"
+		m.gatewayOnline = false
+		m.gatewayStopped = true
+		m.connectionEpoch++
+		clear(m.typists)
 	case gatewayEvent:
+		if msg.selfUserID != "" {
+			m.selfUserID = msg.selfUserID
+			delete(m.typists, msg.selfUserID)
+		}
 		if msg.status != "" {
+			m.connectionEpoch++
+			m.gatewayOnline = msg.status == "Gateway connected" || msg.status == "Gateway resumed"
+			if m.gatewayOnline {
+				m.hadConnection = true
+				m.gatewayStopped = false
+			}
+			if m.channel.ID != "" {
+				m.syncRequired = true
+			}
+			if msg.status != "Gateway connected" && msg.status != "Gateway resumed" {
+				clear(m.typists)
+			}
 			m.connection = msg.status
 		}
-		if msg.fresh && m.screen == "chat" {
-			if m.busy == "" {
-				return m, tea.Batch(m.loadHistory("chat"), m.nextEvent())
+		typingCommand := m.receiveTyping(msg, time.Now())
+		if msg.kind == "TYPING_START" {
+			return m, tea.Batch(typingCommand, m.nextEvent())
+		}
+		if msg.status != "" {
+			if command := m.maybeSync(); command != nil {
+				return m, tea.Batch(command, m.nextEvent())
 			}
-			m.refreshWanted = true
 		}
 		if msg.kind != "" {
-			if m.busy == "chat" || m.busy == "older" {
+			if m.busy == "chat" || m.busy == "older" || m.busy == "sync" {
 				m.pending = append(m.pending, msg)
 			} else {
 				m.applyEvent(msg)
@@ -134,10 +191,22 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case loaded:
 		appLog.Debug("ui.loaded", "kind", msg.kind, "channel_id", msg.channelID, "servers", len(msg.guilds), "channels", len(msg.channels), "messages", len(msg.messages))
 		m.busy = ""
+		if msg.kind == "sync" && msg.epoch != m.connectionEpoch {
+			appLog.Warn("ui.sync_stale", "epoch", msg.epoch, "current_epoch", m.connectionEpoch)
+			return m, m.maybeSync()
+		}
 		if msg.err != nil {
 			appLog.Error("ui.load_failed", "kind", msg.kind, "error", msg.err.Error())
 			m.status = msg.kind + ": " + msg.err.Error()
+			if msg.kind == "sync" {
+				for _, event := range m.pending {
+					m.applyEvent(event)
+				}
+			}
 			m.pending = nil
+			if msg.kind != "sync" {
+				return m, m.maybeSync()
+			}
 			return m, nil
 		}
 		switch msg.kind {
@@ -150,6 +219,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.query = ""
 			m.index = 0
 			m.status = "Select a channel"
+			m.rememberChannels()
 		case "chat":
 			if m.screen != "chat" {
 				m.mode = strings.ToUpper(m.config.Behavior.StartMode)
@@ -183,10 +253,34 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.applyEvent(event)
 			}
 			m.pending = nil
+		case "sync":
+			anchor := ""
+			following := m.messageIndex >= len(m.messages)-1
+			if len(m.messages) > 0 {
+				anchor = m.messages[m.messageIndex].ID
+			}
+			m.messages = mergeMessages(nil, msg.messages)
+			m.messageIndex = min(m.messageIndex, max(0, len(m.messages)-1))
+			if following {
+				m.messageIndex = max(0, len(m.messages)-1)
+			} else {
+				for i, item := range m.messages {
+					if item.ID == anchor {
+						m.messageIndex = i
+						break
+					}
+				}
+			}
+			for _, event := range m.pending {
+				m.applyEvent(event)
+			}
+			m.pending = nil
+			m.syncRequired = false
+			m.status = "복구 완료 · 전송 가능"
+			appLog.Info("ui.sync_completed", "channel_id", msg.channelID, "messages", len(m.messages), "epoch", msg.epoch)
 		}
-		if m.refreshWanted && m.screen == "chat" {
-			m.refreshWanted = false
-			return m, m.loadHistory("chat")
+		if command := m.maybeSync(); command != nil {
+			return m, command
 		}
 	case sent:
 		appLog.Debug("ui.send_result", "message_id", msg.message.ID, "success", msg.err == nil)
@@ -200,26 +294,39 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.draft.set("")
 			m.status = "Sent"
 		}
-		if m.refreshWanted && m.screen == "chat" {
-			m.refreshWanted = false
-			return m, m.loadHistory("chat")
+		if command := m.maybeSync(); command != nil {
+			return m, command
 		}
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return m, m.key(msg)
 	}
 	return m, nil
 }
-func (m *model) key(key tea.KeyMsg) tea.Cmd {
-	name := key.String()
+func (m *model) key(key tea.KeyPressMsg) tea.Cmd {
+	if command, handled := m.koreanNormalKey(key); handled {
+		return command
+	}
+	name := keyName(key)
+	if m.mode == "NORMAL" && m.entry == "" {
+		name = normalKeyName(key)
+	}
 	if name == "ctrl+c" || name == "ctrl+q" {
 		return tea.Quit
 	}
+	if m.showConfig {
+		m.configKey(name)
+		return nil
+	}
 	if name == "esc" {
+		returnToPrevious := (m.screen == "servers" || m.screen == "channels") && m.entry == "" && !m.showHelp
 		m.showHelp = false
 		m.completions = nil
 		m.mode = "NORMAL"
 		m.entry = ""
 		m.prefix = ""
+		if returnToPrevious {
+			return m.returnFromList()
+		}
 		return nil
 	}
 	if m.entry != "" {
@@ -269,16 +376,13 @@ func (m *model) key(key tea.KeyMsg) tea.Cmd {
 		}
 		return nil
 	}
-	if !key.Paste && (name == "ctrl+s" || name == m.config.Behavior.SendKey && m.screen == "chat" && m.mode == "INSERT") {
+	if name == "ctrl+s" || name == m.config.Behavior.SendKey && m.screen == "chat" && m.mode == "INSERT" {
 		return m.send()
 	}
 	if m.mode == "INSERT" {
 		if m.busy != "send" {
 			m.draft.key(key, true)
 		}
-		return nil
-	}
-	if key.Paste {
 		return nil
 	}
 	previous := m.prefix
@@ -380,7 +484,10 @@ func (m *model) selectItem() tea.Cmd {
 			return loaded{kind: "channels", channels: data, err: err}
 		}
 	}
+	m.rememberChannels()
 	m.saveDraft()
+	clear(m.typists)
+	m.syncRequired = false
 	m.channel = item
 	m.draft = m.drafts[item.ID]
 	m.messages = nil
@@ -429,6 +536,20 @@ func (m *model) saveDraft() {
 	}
 }
 func (m *model) execute(command string) tea.Cmd {
+	if command == "config" {
+		m.configDraft = m.config
+		m.configIndex = 0
+		m.configStatus = ""
+		m.showConfig = true
+		m.showHelp = false
+		m.mode = "NORMAL"
+		m.prefix = ""
+		return nil
+	}
+	if command == "layout" || strings.HasPrefix(command, "layout ") {
+		m.changeLayout(command)
+		return nil
+	}
 	if command == "?" || command == "help" {
 		m.showHelp = true
 		m.helpLine = 0
@@ -450,12 +571,21 @@ func (m *model) execute(command string) tea.Cmd {
 			m.status = "Select a server first"
 			return nil
 		}
+		if m.screen == "chat" {
+			m.rememberChat()
+		} else if m.screen == "channels" {
+			m.rememberChannels()
+		}
 		m.saveDraft()
+		clear(m.typists)
 		m.channel = channel{}
 		m.draft.set("")
 		m.screen = command
 		m.index = 0
 		m.query = ""
+		if command == "channels" {
+			m.rememberChannels()
+		}
 		if command == "servers" {
 			m.guild = guild{}
 			if m.gateway != nil {
@@ -466,12 +596,23 @@ func (m *model) execute(command string) tea.Cmd {
 		return m.send()
 	case "older":
 		return m.older()
+	case "sync":
+		if !m.gatewayOnline {
+			m.status = "연결 복구를 기다려주세요. 초안을 유지합니다"
+			return nil
+		}
+		return m.startSync()
 	default:
 		m.status = "Unknown command. :?"
 	}
 	return nil
 }
 func (m *model) send() tea.Cmd {
+	if m.gateway != nil && (!m.gatewayOnline || m.gatewayStopped || m.syncRequired) {
+		m.status = "전송 불가 · 연결 및 메시지 복구를 기다려주세요"
+		appLog.Warn("ui.send_blocked", "online", m.gatewayOnline, "sync_required", m.syncRequired)
+		return nil
+	}
 	if m.screen != "chat" || m.busy != "" || strings.TrimSpace(m.draft.value()) == "" {
 		return nil
 	}
@@ -551,6 +692,9 @@ func (m *model) applyEvent(event gatewayEvent) {
 	}
 }
 func (m *model) body() ([]string, int) {
+	if m.showConfig {
+		return m.configLines(), m.configIndex + 4
+	}
 	if m.showHelp {
 		lines := m.helpLines()
 		return lines, min(m.helpLine, len(lines)-1)
@@ -578,6 +722,12 @@ func (m *model) body() ([]string, int) {
 	var lines []string
 	target := 0
 	groupPrefix := ""
+	wrapWidth := m.width
+	gutter := 0
+	if m.config.Layout.Style == "editor" && m.width > 8 {
+		gutter = 6
+		wrapWidth -= gutter
+	}
 	for i, item := range m.messages {
 		grouped := false
 		if i > 0 {
@@ -593,9 +743,9 @@ func (m *model) body() ([]string, int) {
 		if i == m.messageIndex {
 			target = len(lines)
 		}
-		name := item.Author.GlobalName
+		name := m.config.authorName(item.Author)
 		if name == "" {
-			name = item.Author.Username
+			name = item.Author.ID
 		}
 		stamp := "--:--"
 		if !item.Timestamp.IsZero() {
@@ -606,8 +756,14 @@ func (m *model) body() ([]string, int) {
 			if m.config.Layout.ShowTimestamps {
 				groupPrefix = stamp + " " + groupPrefix
 			}
+			if m.config.Layout.Style == "log" {
+				groupPrefix = "INFO  " + singleLine(name) + " | "
+				if m.config.Layout.ShowTimestamps {
+					groupPrefix = "[" + stamp + "] " + groupPrefix
+				}
+			}
 		}
-		indent := strings.Repeat(" ", min(ansi.StringWidth(groupPrefix), max(0, m.width-4)))
+		indent := strings.Repeat(" ", min(ansi.StringWidth(groupPrefix), max(0, wrapWidth-4)))
 		prefix := groupPrefix
 		if grouped {
 			prefix = indent
@@ -621,8 +777,20 @@ func (m *model) body() ([]string, int) {
 		if strings.TrimSpace(content) == "" {
 			content = "[non-text message]"
 		}
+		if m.config.Layout.Style == "editor" {
+			if !grouped {
+				lines = append(lines, strings.Split(ansi.Hardwrap("// "+strings.TrimSpace(groupPrefix), wrapWidth, true), "\n")...)
+			}
+			prefix = ""
+			indent = ""
+		}
 		content = strings.ReplaceAll(content, "\n", "\n"+indent)
-		lines = append(lines, strings.Split(ansi.Hardwrap(prefix+content, m.width, true), "\n")...)
+		lines = append(lines, strings.Split(ansi.Hardwrap(prefix+content, wrapWidth, true), "\n")...)
+	}
+	if gutter > 0 {
+		for i, line := range lines {
+			lines[i] = fmt.Sprintf("%4d  %s", i+1, line)
+		}
 	}
 	return lines, target
 }
@@ -633,7 +801,7 @@ func editorLines(e editor, prefix string, width int) ([]string, int) {
 	text := before + "▏" + string(e.text[e.cursor:])
 	return strings.Split(ansi.Hardwrap(text, width, true), "\n"), len(beforeLines) - 1
 }
-func (m *model) View() string {
+func (m *model) View() tea.View {
 	input, cursor := editorLines(m.draft, "> ", m.width)
 	if m.entry != "" {
 		prefix := ":"
@@ -642,18 +810,38 @@ func (m *model) View() string {
 		}
 		input, cursor = editorLines(m.command, prefix, m.width)
 	}
+	if m.showConfig {
+		input, cursor = []string{m.configStatus}, 0
+		if m.configStatus == "" {
+			input[0] = "j/k 이동 · h/l 변경 · Ctrl-S 저장 · Esc 취소"
+		}
+	}
 	metaHeight := 0
 	if m.config.Layout.ShowMetadata {
 		metaHeight = 1
 	}
-	gapHeight := min(m.config.Layout.InputGapLines, max(0, m.height-metaHeight-2))
-	inputHeight := min(m.config.Layout.InputMaxLines, min(len(input), max(1, m.height-metaHeight-gapHeight-1)))
+	typingText := m.typingLabel(time.Now())
+	typingHeight := 0
+	if typingText != "" {
+		typingHeight = 1
+	}
+	connectionText := m.connectionHint()
+	connectionHeight := 0
+	if connectionText != "" {
+		connectionHeight = 1
+	}
+	if m.height-metaHeight-typingHeight-connectionHeight < 2 {
+		typingText = ""
+		typingHeight = 0
+	}
+	gapHeight := min(m.config.Layout.InputGapLines, max(0, m.height-metaHeight-typingHeight-connectionHeight-2))
+	inputHeight := min(m.config.Layout.InputMaxLines, min(len(input), max(1, m.height-metaHeight-typingHeight-connectionHeight-gapHeight-1)))
 	inputStart := max(0, min(cursor-inputHeight+1, len(input)-inputHeight))
 	input = input[inputStart : inputStart+inputHeight]
-	bodyHeight := max(1, m.height-inputHeight-gapHeight-metaHeight)
+	bodyHeight := max(1, m.height-inputHeight-gapHeight-metaHeight-typingHeight-connectionHeight)
 	body, target := m.body()
 	start := max(0, min(target-bodyHeight+1, len(body)-bodyHeight))
-	if !m.showHelp && m.screen == "chat" && m.messageIndex == len(m.messages)-1 {
+	if !m.showHelp && !m.showConfig && m.screen == "chat" && m.messageIndex == len(m.messages)-1 {
 		start = max(0, len(body)-bodyHeight)
 	}
 	visible := append([]string{}, body[start:min(len(body), start+bodyHeight)]...)
@@ -664,7 +852,16 @@ func (m *model) View() string {
 		visible = append(visible, "")
 	}
 	visible = append(visible, input...)
+	if connectionText != "" {
+		visible = append(visible, ansi.Truncate(connectionText, m.width, ""))
+	}
+	if typingText != "" {
+		visible = append(visible, "\x1b[90m"+ansi.Truncate(typingText, m.width, "")+"\x1b[0m")
+	}
 	mode := m.mode
+	if m.config.Layout.Style != "plain" {
+		mode += " [" + m.config.Layout.Style + "]"
+	}
 	if m.entry != "" {
 		mode = strings.ToUpper(m.entry)
 	}
@@ -682,5 +879,10 @@ func (m *model) View() string {
 	for i, line := range visible {
 		visible[i] = ansi.Truncate(line, m.width, "")
 	}
-	return strings.Join(visible, "\n")
+	view := tea.NewView(strings.Join(visible, "\n"))
+	view.AltScreen = true
+	view.KeyboardEnhancements.ReportAlternateKeys = true
+	view.KeyboardEnhancements.ReportAllKeysAsEscapeCodes = true
+	view.KeyboardEnhancements.ReportAssociatedText = true
+	return view
 }

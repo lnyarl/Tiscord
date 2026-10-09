@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 func TestDetailedLogsOmitCredentialsAndMessageBodies(t *testing.T) {
@@ -34,8 +34,8 @@ func TestDetailedLogsOmitCredentialsAndMessageBodies(t *testing.T) {
 		t.Fatal("expected rejection")
 	}
 	m := openDemo(t)
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("input-secret")})
+	m.Update(tea.KeyPressMsg{Text: "i"})
+	m.Update(tea.KeyPressMsg{Text: "input-secret"})
 	m.applyEvent(event("MESSAGE_CREATE", message{ID: "3", ChannelID: "10", Content: "message-secret"}))
 	text := output.String()
 	for _, secret := range []string{"private-token", "message-secret", "input-secret", "Authorization"} {

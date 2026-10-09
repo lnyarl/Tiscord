@@ -15,10 +15,11 @@ import (
 )
 
 type gatewayEvent struct {
-	kind   string
-	data   json.RawMessage
-	status string
-	fresh  bool
+	kind       string
+	data       json.RawMessage
+	status     string
+	fresh      bool
+	selfUserID string
 }
 type packet struct {
 	Op   int             `json:"op"`
@@ -71,7 +72,11 @@ func (g *gateway) Run(ctx context.Context) {
 	backoff := time.Second
 	for ctx.Err() == nil {
 		g.emit(ctx, gatewayEvent{status: "Gateway connecting"})
+		connectedAt := time.Now()
 		err := g.connect(ctx)
+		if time.Since(connectedAt) >= 30*time.Second {
+			backoff = time.Second
+		}
 		var logClose *websocket.CloseError
 		if errors.As(err, &logClose) {
 			appLog.Warn("gateway.closed", "close_code", logClose.Code)
@@ -287,6 +292,7 @@ func (g *gateway) connect(ctx context.Context) error {
 					var data struct {
 						Session string `json:"session_id"`
 						URL     string `json:"resume_gateway_url"`
+						User    author `json:"user"`
 					}
 					if err := json.Unmarshal(p.Data, &data); err != nil {
 						return err
@@ -300,14 +306,14 @@ func (g *gateway) connect(ctx context.Context) error {
 					if err := subscribe(); err != nil {
 						return err
 					}
-					g.emit(ctx, gatewayEvent{status: "Gateway connected", fresh: true})
+					g.emit(ctx, gatewayEvent{status: "Gateway connected", fresh: true, selfUserID: data.User.ID})
 				} else if p.Type == "RESUMED" {
 					ready = true
 					if err := subscribe(); err != nil {
 						return err
 					}
 					g.emit(ctx, gatewayEvent{status: "Gateway resumed"})
-				} else if strings.HasPrefix(p.Type, "MESSAGE_") {
+				} else if strings.HasPrefix(p.Type, "MESSAGE_") || p.Type == "TYPING_START" {
 					g.emit(ctx, gatewayEvent{kind: p.Type, data: p.Data})
 				}
 			}

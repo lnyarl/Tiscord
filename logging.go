@@ -11,7 +11,7 @@ import (
 
 var appLog = slog.New(slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-func openLog(path string, level slog.Level) (*os.File, *slog.Logger, error) {
+func openLog(path string, level slog.Leveler) (*os.File, *slog.Logger, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return nil, nil, err
 	}

@@ -4,11 +4,12 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"golang.org/x/term"
 )
 
@@ -43,7 +44,9 @@ func main() {
 		fmt.Fprintln(os.Stderr, "Config:", *settingsPath, "-", err)
 		os.Exit(1)
 	}
-	logFile, logger, err := openLog(logPath, settings.logLevel())
+	var logLevel slog.LevelVar
+	logLevel.Set(settings.logLevel())
+	logFile, logger, err := openLog(logPath, &logLevel)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Could not open log file:", err)
 		os.Exit(1)
@@ -96,7 +99,9 @@ func main() {
 	appLog.Info("ui.started")
 	ui := newModel(ctx, client, g)
 	ui.config = settings
-	_, err = tea.NewProgram(ui, tea.WithAltScreen(), tea.WithContext(ctx)).Run()
+	ui.configPath = *settingsPath
+	ui.logLevel = &logLevel
+	_, err = tea.NewProgram(ui, tea.WithContext(ctx)).Run()
 	cancel()
 	if gatewayDone != nil {
 		<-gatewayDone

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"unicode"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 type editor struct {
@@ -27,29 +27,31 @@ func (e *editor) remove(start, end int) {
 	e.text = append(e.text[:start], e.text[end:]...)
 	e.cursor = start
 }
-func (e *editor) key(key tea.KeyMsg, multiline bool) {
-	switch key.Type {
-	case tea.KeyRunes:
-		e.insert([]rune(clean(string(key.Runes))))
-	case tea.KeySpace:
+func (e *editor) key(key tea.KeyPressMsg, multiline bool) {
+	if key.Text != "" && key.Mod&(tea.ModCtrl|tea.ModAlt|tea.ModSuper) == 0 {
+		e.insert([]rune(clean(key.Text)))
+		return
+	}
+	switch keyName(key) {
+	case "space":
 		e.insert([]rune{' '})
-	case tea.KeyEnter, tea.KeyCtrlJ:
+	case "enter", "ctrl+j":
 		if multiline {
 			e.insert([]rune{'\n'})
 		}
-	case tea.KeyBackspace, tea.KeyCtrlH:
+	case "backspace", "ctrl+h":
 		if e.cursor > 0 {
 			e.remove(e.cursor-1, e.cursor)
 		}
-	case tea.KeyDelete:
+	case "delete":
 		e.remove(e.cursor, e.cursor+1)
-	case tea.KeyLeft:
+	case "left":
 		e.cursor = max(0, e.cursor-1)
-	case tea.KeyRight:
+	case "right":
 		e.cursor = min(len(e.text), e.cursor+1)
-	case tea.KeyHome, tea.KeyCtrlA:
+	case "home", "ctrl+a":
 		e.lineStart()
-	case tea.KeyEnd, tea.KeyCtrlE:
+	case "end", "ctrl+e":
 		e.lineEnd()
 	}
 }

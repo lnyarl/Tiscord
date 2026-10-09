@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -31,13 +31,13 @@ func openDemo(t *testing.T) *model {
 }
 func runeKey(m *model, text string) {
 	for _, r := range text {
-		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
 }
 func TestVimUnicodeMultilineAndFooter(t *testing.T) {
 	m := openDemo(t)
 	runeKey(m, "i안녕하세요")
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	runeKey(m, "둘째 줄")
 	if m.draft.value() != "안녕하세요\n둘째 줄" {
 		t.Fatal(m.draft.value())
@@ -45,16 +45,16 @@ func TestVimUnicodeMultilineAndFooter(t *testing.T) {
 	if len(m.messages) != 1 {
 		t.Fatal("Enter sent the draft")
 	}
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	runCommand(m, cmd)
 	if m.messages[len(m.messages)-1].Content != "안녕하세요\n둘째 줄" || m.draft.value() != "" {
 		t.Fatal("send failed")
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if m.mode != "NORMAL" {
 		t.Fatal(m.mode)
 	}
-	rows := strings.Split(ansi.Strip(m.View()), "\n")
+	rows := strings.Split(ansi.Strip(m.View().Content), "\n")
 	if len(rows) != m.height {
 		t.Fatalf("wrong height: %d", len(rows))
 	}
@@ -63,7 +63,7 @@ func TestVimUnicodeMultilineAndFooter(t *testing.T) {
 	}
 	for _, width := range []int{1, 10, 40, 80} {
 		m.width = width
-		for _, line := range strings.Split(m.View(), "\n") {
+		for _, line := range strings.Split(m.View().Content, "\n") {
 			if ansi.StringWidth(line) > width {
 				t.Fatalf("line exceeds %d: %q", width, line)
 			}
@@ -75,7 +75,7 @@ func TestChannelSearchAndDrafts(t *testing.T) {
 	m.draft.set("general 초안")
 	m.execute("channels")
 	runeKey(m, "/dev")
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.query != "dev" {
 		t.Fatal("search failed")
 	}
@@ -241,19 +241,19 @@ func TestTerminalProgramKeyboardFlow(t *testing.T) {
 		}
 	}
 	await(func(s uiSnapshot) bool { return s.status == "Select a server" })
-	program.Send(tea.KeyMsg{Type: tea.KeyEnter})
+	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	await(func(s uiSnapshot) bool { return s.screen == "channels" })
-	program.Send(tea.KeyMsg{Type: tea.KeyEnter})
+	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	await(func(s uiSnapshot) bool { return s.screen == "chat" })
-	program.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
-	program.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("안녕하세요")})
-	program.Send(tea.KeyMsg{Type: tea.KeyEnter})
-	program.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("둘째 줄")})
-	program.Send(tea.KeyMsg{Type: tea.KeyCtrlS})
+	program.Send(tea.KeyPressMsg{Text: "i"})
+	program.Send(tea.KeyPressMsg{Text: "안녕하세요"})
+	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	program.Send(tea.KeyPressMsg{Text: "둘째 줄"})
+	program.Send(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	await(func(s uiSnapshot) bool {
 		return s.status == "Sent" && s.count == 2 && s.content == "안녕하세요\n둘째 줄"
 	})
-	program.Send(tea.KeyMsg{Type: tea.KeyCtrlQ})
+	program.Send(tea.KeyPressMsg{Code: 'q', Mod: tea.ModCtrl})
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}

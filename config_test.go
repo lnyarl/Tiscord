@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -90,7 +90,7 @@ func TestConfiguredInputHeightAndMetadata(t *testing.T) {
 	m.config.Layout.InputMaxLines = 2
 	m.config.Layout.InputGapLines = 0
 	m.config.Layout.ShowMetadata = false
-	rows := strings.Split(ansi.Strip(m.View()), "\n")
+	rows := strings.Split(ansi.Strip(m.View().Content), "\n")
 	if len(rows) != m.height || rows[len(rows)-2] != "three" || rows[len(rows)-1] != "four▏" || strings.Contains(strings.Join(rows, "\n"), "NORMAL ·") {
 		t.Fatalf("configured input layout failed: %q", rows)
 	}
@@ -99,7 +99,7 @@ func TestConfiguredInputHeightAndMetadata(t *testing.T) {
 		m.config.Layout.InputMaxLines = 10
 		m.config.Layout.InputGapLines = 3
 		m.config.Layout.ShowMetadata = true
-		if len(strings.Split(m.View(), "\n")) != height {
+		if len(strings.Split(m.View().Content, "\n")) != height {
 			t.Fatal("small terminal overflow")
 		}
 	}
@@ -115,19 +115,19 @@ func TestConfiguredEnterSendAndInitialInsertMode(t *testing.T) {
 	}
 	m.config.Behavior.SendKey = "enter"
 	runeKey(m, "hello")
-	m.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	m.Update(tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
 	runeKey(m, "world")
 	if m.draft.value() != "hello\nworld" {
 		t.Fatal("alternative newline failed")
 	}
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	runCommand(m, cmd)
 	if m.draft.value() != "" || m.messages[len(m.messages)-1].Content != "hello\nworld" {
 		t.Fatal("Enter send not applied")
 	}
 	m.execute("channels")
 	m.mode = "NORMAL"
-	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	runCommand(m, cmd)
 	if m.screen != "chat" {
 		t.Fatal("Enter send intercepted channel selection")

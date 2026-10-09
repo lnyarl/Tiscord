@@ -4,22 +4,22 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
-func commandKey(m *model, key tea.KeyType) { m.Update(tea.KeyMsg{Type: key}) }
+func commandKey(m *model, key tea.KeyPressMsg) { m.Update(key) }
 
 func TestCommandTabCyclesMatchesAndWraps(t *testing.T) {
 	m := openDemo(t)
 	runeKey(m, ":s")
-	for _, expected := range []string{"servers", "send", "servers"} {
-		commandKey(m, tea.KeyTab)
+	for _, expected := range []string{"servers", "send", "sync", "servers"} {
+		commandKey(m, tea.KeyPressMsg{Code: tea.KeyTab})
 		if m.command.value() != expected {
 			t.Fatalf("wanted %s, got %s", expected, m.command.value())
 		}
 	}
-	commandKey(m, tea.KeyShiftTab)
-	if m.command.value() != "send" {
+	commandKey(m, tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	if m.command.value() != "sync" {
 		t.Fatal("reverse completion failed")
 	}
 }
@@ -28,12 +28,12 @@ func TestEmptyCommandTabCyclesAllCommands(t *testing.T) {
 	m := openDemo(t)
 	runeKey(m, ":")
 	for _, command := range commands {
-		commandKey(m, tea.KeyTab)
+		commandKey(m, tea.KeyPressMsg{Code: tea.KeyTab})
 		if m.command.value() != command.name {
 			t.Fatal("full command cycle failed")
 		}
 	}
-	commandKey(m, tea.KeyTab)
+	commandKey(m, tea.KeyPressMsg{Code: tea.KeyTab})
 	if m.command.value() != commands[0].name {
 		t.Fatal("full cycle did not wrap")
 	}
@@ -42,18 +42,18 @@ func TestEmptyCommandTabCyclesAllCommands(t *testing.T) {
 func TestEditingOrEscapingResetsCompletion(t *testing.T) {
 	m := openDemo(t)
 	runeKey(m, ":s")
-	commandKey(m, tea.KeyTab)
+	commandKey(m, tea.KeyPressMsg{Code: tea.KeyTab})
 	for i := 0; i < len("servers"); i++ {
-		commandKey(m, tea.KeyBackspace)
+		commandKey(m, tea.KeyPressMsg{Code: tea.KeyBackspace})
 	}
 	runeKey(m, "o")
-	commandKey(m, tea.KeyTab)
+	commandKey(m, tea.KeyPressMsg{Code: tea.KeyTab})
 	if m.command.value() != "older" {
 		t.Fatal("editing did not reset candidates")
 	}
-	commandKey(m, tea.KeyEsc)
+	commandKey(m, tea.KeyPressMsg{Code: tea.KeyEsc})
 	runeKey(m, ":s")
-	commandKey(m, tea.KeyTab)
+	commandKey(m, tea.KeyPressMsg{Code: tea.KeyTab})
 	if m.command.value() != "servers" {
 		t.Fatal("Esc did not reset candidates")
 	}
@@ -62,14 +62,14 @@ func TestEditingOrEscapingResetsCompletion(t *testing.T) {
 func TestNoMatchAndSearchDoNotCompleteCommands(t *testing.T) {
 	m := openDemo(t)
 	runeKey(m, ":xyz")
-	commandKey(m, tea.KeyTab)
+	commandKey(m, tea.KeyPressMsg{Code: tea.KeyTab})
 	if m.command.value() != "xyz" {
 		t.Fatal("unmatched input was replaced")
 	}
-	commandKey(m, tea.KeyEsc)
+	commandKey(m, tea.KeyPressMsg{Code: tea.KeyEsc})
 	m.execute("channels")
 	runeKey(m, "/s")
-	commandKey(m, tea.KeyTab)
+	commandKey(m, tea.KeyPressMsg{Code: tea.KeyTab})
 	if m.command.value() != "s" {
 		t.Fatal("search used command completion")
 	}
@@ -80,7 +80,7 @@ func TestQuestionHelpShowsCommandsAndPreservesChat(t *testing.T) {
 	m.draft.set("keep this draft")
 	m.messageIndex = 0
 	runeKey(m, ":?")
-	commandKey(m, tea.KeyEnter)
+	commandKey(m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !m.showHelp {
 		t.Fatal("question command did not open help")
 	}
@@ -91,10 +91,10 @@ func TestQuestionHelpShowsCommandsAndPreservesChat(t *testing.T) {
 			t.Fatalf("missing command %s", command.name)
 		}
 	}
-	if !strings.Contains(m.View(), "사용 가능한 명령어") {
+	if !strings.Contains(m.View().Content, "사용 가능한 명령어") {
 		t.Fatal("help is scrolled to bottom on opening")
 	}
-	commandKey(m, tea.KeyEsc)
+	commandKey(m, tea.KeyPressMsg{Code: tea.KeyEsc})
 	if m.showHelp || m.screen != "chat" || m.draft.value() != "keep this draft" || m.messageIndex != 0 {
 		t.Fatal("closing help changed chat state")
 	}
@@ -108,8 +108,8 @@ func TestQuestionHelpShowsCommandsAndPreservesChat(t *testing.T) {
 func TestCompletedCommandExecutes(t *testing.T) {
 	m := openDemo(t)
 	runeKey(m, ":ser")
-	commandKey(m, tea.KeyTab)
-	commandKey(m, tea.KeyEnter)
+	commandKey(m, tea.KeyPressMsg{Code: tea.KeyTab})
+	commandKey(m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.screen != "servers" || m.entry != "" {
 		t.Fatal("completed command did not execute")
 	}

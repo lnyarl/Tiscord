@@ -3,15 +3,19 @@
     "group_messages": true,
     "group_window_seconds": 300,
     "send_key": "ctrl+s",
-    "start_mode": "normal"
+    "start_mode": "normal",
+    "korean_shortcuts": true
   },
   "layout": {
+    "style": "plain",
+    "author_name": "username",
     "group_spacing": 0,
     "show_timestamps": true,
     "timestamp_format": "HH:mm",
     "input_max_lines": 3,
     "input_gap_lines": 1,
-    "show_metadata": true
+    "show_metadata": true,
+    "show_typing": true
   },
   "logging": {
     "level": "debug"
