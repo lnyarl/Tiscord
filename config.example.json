@@ -1,0 +1,19 @@
+{
+  "behavior": {
+    "group_messages": true,
+    "group_window_seconds": 300,
+    "send_key": "ctrl+s",
+    "start_mode": "normal"
+  },
+  "layout": {
+    "group_spacing": 0,
+    "show_timestamps": true,
+    "timestamp_format": "HH:mm",
+    "input_max_lines": 3,
+    "input_gap_lines": 1,
+    "show_metadata": true
+  },
+  "logging": {
+    "level": "debug"
+  }
+}
