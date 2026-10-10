@@ -51,6 +51,12 @@ func (m *model) startSync() tea.Cmd {
 	if len(m.messages) > 0 {
 		boundary = m.messages[0].ID
 	}
+	if m.unreadAwaiting && m.config.Behavior.RestoreUnread {
+		readID := m.readIDs[id]
+		if readID != "" && readID != "0" && snowflakeLess(readID, boundary) {
+			boundary = readID
+		}
+	}
 	appLog.Info("ui.sync_started", "channel_id", id, "boundary", boundary, "epoch", epoch)
 	return func() tea.Msg {
 		if ready != nil {

@@ -15,11 +15,13 @@ import (
 )
 
 type gatewayEvent struct {
+	readStates []readState
 	kind       string
 	data       json.RawMessage
 	status     string
 	fresh      bool
 	selfUserID string
+	sessionID  string
 }
 type packet struct {
 	Op   int             `json:"op"`
@@ -290,9 +292,10 @@ func (g *gateway) connect(ctx context.Context) error {
 			case 0:
 				if p.Type == "READY" {
 					var data struct {
-						Session string `json:"session_id"`
-						URL     string `json:"resume_gateway_url"`
-						User    author `json:"user"`
+						Session    string          `json:"session_id"`
+						URL        string          `json:"resume_gateway_url"`
+						User       author          `json:"user"`
+						ReadStates json.RawMessage `json:"read_state"`
 					}
 					if err := json.Unmarshal(p.Data, &data); err != nil {
 						return err
@@ -306,14 +309,14 @@ func (g *gateway) connect(ctx context.Context) error {
 					if err := subscribe(); err != nil {
 						return err
 					}
-					g.emit(ctx, gatewayEvent{status: "Gateway connected", fresh: true, selfUserID: data.User.ID})
+					g.emit(ctx, gatewayEvent{status: "Gateway connected", fresh: true, selfUserID: data.User.ID, sessionID: data.Session, readStates: decodeReadStates(data.ReadStates)})
 				} else if p.Type == "RESUMED" {
 					ready = true
 					if err := subscribe(); err != nil {
 						return err
 					}
-					g.emit(ctx, gatewayEvent{status: "Gateway resumed"})
-				} else if strings.HasPrefix(p.Type, "MESSAGE_") || p.Type == "TYPING_START" {
+					g.emit(ctx, gatewayEvent{status: "Gateway resumed", sessionID: g.session})
+				} else if strings.HasPrefix(p.Type, "MESSAGE_") || p.Type == "TYPING_START" || p.Type == "APPLICATION_COMMAND_AUTOCOMPLETE_RESPONSE" || p.Type == "INTERACTION_CREATE" || p.Type == "INTERACTION_SUCCESS" || p.Type == "INTERACTION_FAILURE" {
 					g.emit(ctx, gatewayEvent{kind: p.Type, data: p.Data})
 				}
 			}

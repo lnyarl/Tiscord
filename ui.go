@@ -15,6 +15,7 @@ import (
 )
 
 type loaded struct {
+	unreadBoundary  string
 	kind, channelID string
 	guilds          []guild
 	channels        []channel
@@ -28,6 +29,15 @@ type sent struct {
 }
 type streamClosed struct{}
 type model struct {
+	readWanted                                           map[string]string
+	unreadAwaiting                                       bool
+	readIDs                                              map[string]string
+	readPending                                          map[string]string
+	unreadBoundary                                       string
+	unreadPinned                                         bool
+	slash                                                slashState
+	slashEpoch                                           uint64
+	slashSession                                         string
 	showConfig                                           bool
 	configDraft                                          config
 	configIndex                                          int
@@ -71,7 +81,7 @@ func newModel(ctx context.Context, client chatClient, g *gateway) *model {
 	if g != nil {
 		connection = "Gateway connecting"
 	}
-	return &model{ctx: ctx, client: client, gateway: g, screen: "servers", mode: "NORMAL", status: "Loading", connection: connection, busy: "servers", width: 80, height: 24, drafts: map[string]editor{}, config: defaultConfig(), typists: map[string]typist{}, gatewayOnline: g == nil}
+	return &model{ctx: ctx, client: client, gateway: g, screen: "servers", mode: "NORMAL", status: "Loading", connection: connection, busy: "servers", width: 80, height: 24, drafts: map[string]editor{}, config: defaultConfig(), typists: map[string]typist{}, gatewayOnline: g == nil, readIDs: make(map[string]string), readPending: make(map[string]string), readWanted: make(map[string]string)}
 }
 func (m *model) Init() tea.Cmd {
 	load := func() tea.Msg {
@@ -124,7 +134,33 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}()
 	appLog.Debug("ui.event", "type", fmt.Sprintf("%T", msg), "screen", m.screen, "busy", m.busy)
+	if cmd, handled := m.updateSlash(msg); handled {
+		return m, cmd
+	}
 	switch msg := msg.(type) {
+	case readMarked:
+		if m.readPending[msg.channelID] == msg.messageID {
+			delete(m.readPending, msg.channelID)
+		}
+		if msg.err != nil {
+			m.status = "읽음 위치 저장 실패: " + msg.err.Error()
+			appLog.Warn("read.save_failed", "channel_id", msg.channelID, "error", msg.err)
+		} else {
+			if current := m.readIDs[msg.channelID]; current == "" || snowflakeLess(current, msg.messageID) {
+				m.readIDs[msg.channelID] = msg.messageID
+			}
+			if m.channel.ID == msg.channelID {
+				m.unreadBoundary = m.readIDs[msg.channelID]
+				if m.firstUnread() < 0 {
+					m.unreadPinned = false
+				}
+				m.status = "읽음 위치 저장 완료"
+			}
+		}
+		if wanted := m.readWanted[msg.channelID]; wanted != "" {
+			delete(m.readWanted, msg.channelID)
+			return m, m.markReadID(msg.channelID, wanted)
+		}
 	case typingExpired:
 		if person, ok := m.typists[msg.userID]; ok && m.channel.ID == msg.channelID && person.expires.Equal(msg.expires) {
 			delete(m.typists, msg.userID)
@@ -133,9 +169,29 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = max(1, msg.Width)
 		m.height = max(4, msg.Height)
+	case tea.MouseWheelMsg:
+		if m.screen == "chat" && m.entry == "" && !m.showHelp && !m.showConfig && !m.slash.open && len(m.messages) > 0 {
+			if msg.Button == tea.MouseWheelUp {
+				m.messageIndex = max(0, m.messageIndex-1)
+			}
+			if msg.Button == tea.MouseWheelDown {
+				m.messageIndex = min(len(m.messages)-1, m.messageIndex+1)
+				if m.messageIndex == len(m.messages)-1 {
+					return m, m.markRead()
+				}
+			}
+		}
 	case tea.KeyboardEnhancementsMsg:
 		appLog.Info("keyboard.capabilities", "alternate_keys", msg.SupportsAlternateKeys(), "all_keys", msg.SupportsAllKeysAsEscapeCodes(), "associated_text", msg.SupportsAssociatedText())
 	case tea.PasteMsg:
+		if m.slash.open {
+			if !m.slash.loading && !m.slash.submitting && (m.slash.command == nil || m.slash.option() != nil) {
+				m.slash.input.insert([]rune(singleLine(msg.Content)))
+				m.slash.index = 0
+				return m, m.scheduleSlashAutocomplete()
+			}
+			break
+		}
 		if m.showConfig {
 			break
 		}
@@ -152,6 +208,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.connectionEpoch++
 		clear(m.typists)
 	case gatewayEvent:
+		if m.receiveReadState(msg) {
+			return m, m.nextEvent()
+		}
+		if msg.sessionID != "" {
+			m.slashSession = msg.sessionID
+		}
+		m.slashEvent(msg)
+		if msg.kind == "APPLICATION_COMMAND_AUTOCOMPLETE_RESPONSE" || msg.kind == "INTERACTION_CREATE" || msg.kind == "INTERACTION_SUCCESS" || msg.kind == "INTERACTION_FAILURE" {
+			return m, m.nextEvent()
+		}
 		if msg.selfUserID != "" {
 			m.selfUserID = msg.selfUserID
 			delete(m.typists, msg.selfUserID)
@@ -235,6 +301,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.pending = nil
 			m.status = "Ready"
+			m.unreadBoundary = m.readIDs[m.channel.ID]
+			if m.unreadBoundary != "" && m.unreadBoundary != "0" && m.config.Behavior.RestoreUnread && len(m.messages) > 0 && snowflakeLess(m.unreadBoundary, m.messages[0].ID) && msg.unreadBoundary != m.unreadBoundary {
+				return m, m.loadHistory("chat")
+			}
+			m.restoreUnread()
+			if m.hadConnection {
+				m.unreadAwaiting = false
+			}
 		case "older":
 			anchor := ""
 			if len(m.messages) > 0 {
@@ -255,7 +329,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pending = nil
 		case "sync":
 			anchor := ""
-			following := m.messageIndex >= len(m.messages)-1
+			following := m.messageIndex >= len(m.messages)-1 && !m.unreadPinned
 			if len(m.messages) > 0 {
 				anchor = m.messages[m.messageIndex].ID
 			}
@@ -277,6 +351,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pending = nil
 			m.syncRequired = false
 			m.status = "복구 완료 · 전송 가능"
+			if m.unreadAwaiting {
+				m.unreadBoundary = m.readIDs[m.channel.ID]
+				m.restoreUnread()
+				m.unreadAwaiting = false
+			}
 			appLog.Info("ui.sync_completed", "channel_id", msg.channelID, "messages", len(m.messages), "epoch", msg.epoch)
 		}
 		if command := m.maybeSync(); command != nil {
@@ -303,6 +382,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 func (m *model) key(key tea.KeyPressMsg) tea.Cmd {
+	if m.slash.open {
+		if keyName(key) == "ctrl+c" || keyName(key) == "ctrl+q" {
+			return tea.Quit
+		}
+		return m.slashKey(key)
+	}
 	if command, handled := m.koreanNormalKey(key); handled {
 		return command
 	}
@@ -381,6 +466,9 @@ func (m *model) key(key tea.KeyPressMsg) tea.Cmd {
 	}
 	if m.mode == "INSERT" {
 		if m.busy != "send" {
+			if m.draft.value() == "" && key.Text == "/" {
+				return m.openSlash()
+			}
 			m.draft.key(key, true)
 		}
 		return nil
@@ -391,6 +479,9 @@ func (m *model) key(key tea.KeyPressMsg) tea.Cmd {
 	case "j", "down":
 		if m.screen == "chat" {
 			m.messageIndex = min(max(0, len(m.messages)-1), m.messageIndex+1)
+			if m.messageIndex == len(m.messages)-1 {
+				return m.markRead()
+			}
 		} else {
 			m.index = min(max(0, len(m.items())-1), m.index+1)
 		}
@@ -410,12 +501,17 @@ func (m *model) key(key tea.KeyPressMsg) tea.Cmd {
 	case "G":
 		m.index = max(0, len(m.items())-1)
 		m.messageIndex = max(0, len(m.messages)-1)
+		if m.screen == "chat" {
+			return m.markRead()
+		}
 	case ":":
 		m.completions = nil
 		m.entry = "command"
 		m.command.set("")
 	case "/":
-		if m.screen != "chat" {
+		if m.screen == "chat" {
+			return m.openSlash()
+		} else {
 			m.entry = "search"
 			m.command.set("")
 		}
@@ -489,6 +585,9 @@ func (m *model) selectItem() tea.Cmd {
 	clear(m.typists)
 	m.syncRequired = false
 	m.channel = item
+	m.unreadBoundary = ""
+	m.unreadPinned = false
+	m.unreadAwaiting = m.gateway != nil && !m.hadConnection
 	m.draft = m.drafts[item.ID]
 	m.messages = nil
 	m.pending = nil
@@ -506,6 +605,10 @@ func (m *model) loadHistory(kind string) tea.Cmd {
 		before = m.messages[0].ID
 	}
 	ready := m.watchReady
+	boundary := ""
+	if kind == "chat" && m.config.Behavior.RestoreUnread {
+		boundary = m.readIDs[id]
+	}
 	return func() tea.Msg {
 		if ready != nil {
 			appLog.Debug("ui.wait_subscription", "channel_id", id)
@@ -518,8 +621,14 @@ func (m *model) loadHistory(kind string) tea.Cmd {
 				return loaded{kind: kind, err: m.ctx.Err()}
 			}
 		}
-		data, err := m.client.Messages(m.ctx, id, before)
-		return loaded{kind: kind, channelID: id, messages: data, err: err}
+		var data []message
+		var err error
+		if boundary != "" && boundary != "0" {
+			data, err = syncHistory(m.ctx, m.client, id, boundary)
+		} else {
+			data, err = m.client.Messages(m.ctx, id, before)
+		}
+		return loaded{kind: kind, channelID: id, messages: data, err: err, unreadBoundary: boundary}
 	}
 }
 func (m *model) older() tea.Cmd {
@@ -536,6 +645,9 @@ func (m *model) saveDraft() {
 	}
 }
 func (m *model) execute(command string) tea.Cmd {
+	if command == "slash" {
+		return m.openSlash()
+	}
 	if command == "config" {
 		m.configDraft = m.config
 		m.configIndex = 0
@@ -608,6 +720,10 @@ func (m *model) execute(command string) tea.Cmd {
 	return nil
 }
 func (m *model) send() tea.Cmd {
+	if text := strings.TrimSpace(m.draft.value()); strings.HasPrefix(text, "/") && !strings.HasPrefix(text, "//") {
+		m.status = "슬래시 명령은 / 또는 :slash 입력 도우미에서 실행해주세요"
+		return nil
+	}
 	if m.gateway != nil && (!m.gatewayOnline || m.gatewayStopped || m.syncRequired) {
 		m.status = "전송 불가 · 연결 및 메시지 복구를 기다려주세요"
 		appLog.Warn("ui.send_blocked", "online", m.gatewayOnline, "sync_required", m.syncRequired)
@@ -617,6 +733,10 @@ func (m *model) send() tea.Cmd {
 		return nil
 	}
 	content := m.draft.value()
+	if strings.HasPrefix(strings.TrimSpace(content), "//") {
+		position := strings.Index(content, "//")
+		content = content[:position] + content[position+1:]
+	}
 	if len(utf16.Encode([]rune(content))) > 2000 {
 		m.status = "Message too long (maximum 2,000 characters)"
 		return nil
@@ -639,7 +759,13 @@ func (m *model) applyEvent(event gatewayEvent) {
 	}
 	appLog.Debug("ui.message_applied", "event", event.kind, "channel_id", identity.ChannelID, "message_id", identity.ID)
 	anchor := ""
-	following := m.messageIndex >= len(m.messages)-1
+	following := m.messageIndex >= len(m.messages)-1 && !m.unreadPinned
+	if following && event.kind == "MESSAGE_CREATE" && m.unreadBoundary == "" {
+		m.unreadBoundary = "0"
+		if len(m.messages) > 0 {
+			m.unreadBoundary = m.messages[len(m.messages)-1].ID
+		}
+	}
 	if len(m.messages) > 0 {
 		anchor = m.messages[m.messageIndex].ID
 	}
@@ -662,7 +788,10 @@ func (m *model) applyEvent(event gatewayEvent) {
 					fields[key] = value
 				}
 				data, _ = json.Marshal(fields)
-				json.Unmarshal(data, &m.messages[i])
+				var updated message
+				if json.Unmarshal(data, &updated) == nil {
+					m.messages[i] = updated
+				}
 				break
 			}
 		}
@@ -681,6 +810,10 @@ func (m *model) applyEvent(event gatewayEvent) {
 	}
 	if following {
 		m.messageIndex = max(0, len(m.messages)-1)
+		if event.kind == "MESSAGE_CREATE" && m.firstUnread() >= 0 {
+			m.messageIndex = m.firstUnread()
+			m.unreadPinned = true
+		}
 	} else {
 		m.messageIndex = min(m.messageIndex, max(0, len(m.messages)-1))
 		for i, item := range m.messages {
@@ -692,6 +825,9 @@ func (m *model) applyEvent(event gatewayEvent) {
 	}
 }
 func (m *model) body() ([]string, int) {
+	if m.slash.open {
+		return m.slashLines()
+	}
 	if m.showConfig {
 		return m.configLines(), m.configIndex + 4
 	}
@@ -722,6 +858,7 @@ func (m *model) body() ([]string, int) {
 	var lines []string
 	target := 0
 	groupPrefix := ""
+	firstUnread := m.firstUnread()
 	wrapWidth := m.width
 	gutter := 0
 	if m.config.Layout.Style == "editor" && m.width > 8 {
@@ -729,11 +866,19 @@ func (m *model) body() ([]string, int) {
 		wrapWidth -= gutter
 	}
 	for i, item := range m.messages {
+		unreadStart := i == firstUnread
+		unreadLine := len(lines)
+		if unreadStart {
+			lines = append(lines, "── 여기부터 새 메시지 ──")
+		}
 		grouped := false
 		if i > 0 {
 			previous := m.messages[i-1]
 			gap := item.Timestamp.Sub(previous.Timestamp)
 			grouped = m.config.Behavior.GroupMessages && item.Author.ID != "" && item.Author.ID == previous.Author.ID && !item.Timestamp.IsZero() && !previous.Timestamp.IsZero() && gap >= 0 && gap <= time.Duration(m.config.Behavior.GroupWindowSeconds)*time.Second
+			if unreadStart {
+				grouped = false
+			}
 			if !grouped {
 				for n := 0; n < m.config.Layout.GroupSpacing; n++ {
 					lines = append(lines, "")
@@ -742,6 +887,9 @@ func (m *model) body() ([]string, int) {
 		}
 		if i == m.messageIndex {
 			target = len(lines)
+			if unreadStart {
+				target = unreadLine
+			}
 		}
 		name := m.config.authorName(item.Author)
 		if name == "" {
@@ -768,15 +916,7 @@ func (m *model) body() ([]string, int) {
 		if grouped {
 			prefix = indent
 		}
-		content := clean(item.Content)
-		for _, link := range append(append([]link{}, item.Attachments...), item.Embeds...) {
-			if link.URL != "" && !strings.Contains(content, link.URL) {
-				content += "\n" + singleLine(link.URL)
-			}
-		}
-		if strings.TrimSpace(content) == "" {
-			content = "[non-text message]"
-		}
+		content := messageText(item)
 		if m.config.Layout.Style == "editor" {
 			if !grouped {
 				lines = append(lines, strings.Split(ansi.Hardwrap("// "+strings.TrimSpace(groupPrefix), wrapWidth, true), "\n")...)
@@ -816,11 +956,24 @@ func (m *model) View() tea.View {
 			input[0] = "j/k 이동 · h/l 변경 · Ctrl-S 저장 · Esc 취소"
 		}
 	}
+	if m.slash.open {
+		prefix := "/"
+		if option := m.slash.option(); option != nil {
+			prefix = singleLine(option.Name) + ": "
+		}
+		input, cursor = editorLines(m.slash.input, prefix, m.width)
+		if m.slash.command != nil && m.slash.option() == nil {
+			input, cursor = []string{"Ctrl-S: 실행 · Esc: 이전 인자"}, 0
+		}
+	}
 	metaHeight := 0
 	if m.config.Layout.ShowMetadata {
 		metaHeight = 1
 	}
 	typingText := m.typingLabel(time.Now())
+	if m.slash.open {
+		typingText = m.slash.hint()
+	}
 	typingHeight := 0
 	if typingText != "" {
 		typingHeight = 1
@@ -841,7 +994,10 @@ func (m *model) View() tea.View {
 	bodyHeight := max(1, m.height-inputHeight-gapHeight-metaHeight-typingHeight-connectionHeight)
 	body, target := m.body()
 	start := max(0, min(target-bodyHeight+1, len(body)-bodyHeight))
-	if !m.showHelp && !m.showConfig && m.screen == "chat" && m.messageIndex == len(m.messages)-1 {
+	if !m.showHelp && !m.showConfig && !m.slash.open && m.screen == "chat" && m.unreadPinned {
+		start = max(0, min(target, len(body)-bodyHeight))
+	}
+	if !m.showHelp && !m.showConfig && !m.slash.open && !m.unreadPinned && m.screen == "chat" && m.messageIndex == len(m.messages)-1 {
 		start = max(0, len(body)-bodyHeight)
 	}
 	visible := append([]string{}, body[start:min(len(body), start+bodyHeight)]...)
@@ -881,6 +1037,9 @@ func (m *model) View() tea.View {
 	}
 	view := tea.NewView(strings.Join(visible, "\n"))
 	view.AltScreen = true
+	if m.screen == "chat" && m.entry == "" && !m.showHelp && !m.showConfig && !m.slash.open {
+		view.MouseMode = tea.MouseModeCellMotion
+	}
 	view.KeyboardEnhancements.ReportAlternateKeys = true
 	view.KeyboardEnhancements.ReportAllKeysAsEscapeCodes = true
 	view.KeyboardEnhancements.ReportAssociatedText = true

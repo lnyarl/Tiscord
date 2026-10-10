@@ -18,6 +18,7 @@ type config struct {
 		SendKey            string `json:"send_key"`
 		StartMode          string `json:"start_mode"`
 		KoreanShortcuts    bool   `json:"korean_shortcuts"`
+		RestoreUnread      bool   `json:"restore_unread"`
 	} `json:"behavior"`
 	Layout struct {
 		Style           string `json:"style"`
@@ -42,6 +43,7 @@ func defaultConfig() config {
 	c.Behavior.SendKey = "ctrl+s"
 	c.Behavior.StartMode = "normal"
 	c.Behavior.KoreanShortcuts = true
+	c.Behavior.RestoreUnread = true
 	c.Layout.ShowTimestamps = true
 	c.Layout.Style = "plain"
 	c.Layout.AuthorName = "username"

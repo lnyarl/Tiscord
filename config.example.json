@@ -4,7 +4,8 @@
     "group_window_seconds": 300,
     "send_key": "ctrl+s",
     "start_mode": "normal",
-    "korean_shortcuts": true
+    "korean_shortcuts": true,
+    "restore_unread": true
   },
   "layout": {
     "style": "plain",

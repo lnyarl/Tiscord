@@ -34,6 +34,24 @@ type author struct {
 type link struct {
 	URL string `json:"url"`
 }
+type embed struct {
+	URL         string `json:"url"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Author      struct {
+		Name string `json:"name"`
+	} `json:"author"`
+	Fields []struct {
+		Name  string `json:"name"`
+		Value string `json:"value"`
+	} `json:"fields"`
+	Footer struct {
+		Text string `json:"text"`
+	} `json:"footer"`
+	Image     link `json:"image"`
+	Thumbnail link `json:"thumbnail"`
+	Video     link `json:"video"`
+}
 type message struct {
 	ID          string    `json:"id"`
 	ChannelID   string    `json:"channel_id"`
@@ -41,7 +59,7 @@ type message struct {
 	Timestamp   time.Time `json:"timestamp"`
 	Author      author    `json:"author"`
 	Attachments []link    `json:"attachments"`
-	Embeds      []link    `json:"embeds"`
+	Embeds      []embed   `json:"embeds"`
 }
 type apiError struct {
 	status int
@@ -58,11 +76,13 @@ type chatClient interface {
 }
 
 type restClient struct {
-	token   string
-	base    string
-	http    *http.Client
-	mu      sync.Mutex
-	readyAt time.Time
+	readMu    sync.Mutex
+	readToken *string
+	token     string
+	base      string
+	http      *http.Client
+	mu        sync.Mutex
+	readyAt   time.Time
 }
 
 var requestID atomic.Uint64
@@ -167,6 +187,9 @@ func (c *restClient) request(ctx context.Context, method, path string, body any,
 			return &apiError{response.StatusCode, prefix + ": " + text}
 		}
 		if out == nil {
+			return nil
+		}
+		if response.StatusCode == http.StatusNoContent && len(data) == 0 {
 			return nil
 		}
 		if json.Unmarshal(data, out) != nil {

@@ -13,6 +13,7 @@ type configField struct {
 }
 
 var configFields = []configField{
+	{"Behavior", "RestoreUnread", "첫 안 읽은 메시지로 진입", nil, 0, 0},
 	{"Layout", "Style", "레이아웃", layoutStyles, 0, 0},
 	{"Layout", "AuthorName", "작성자 이름", []string{"username", "display"}, 0, 0},
 	{"Layout", "GroupSpacing", "메시지 그룹 사이 빈 줄", nil, 0, 3},

@@ -17,6 +17,7 @@ var commands = []struct{ name, description string }{
 	{"sync", "현재 채널 기록 다시 동기화 (연결된 채팅 화면에서 사용)"},
 	{"layout", "plain/log/editor 형식 순환 또는 :layout 형식명으로 선택 (자동 저장)"},
 	{"config", "설정 화면 열기 · j/k 이동 · h/l 변경 · Ctrl-S 저장 · Esc 취소"},
+	{"slash", "Discord 봇 슬래시 명령 입력 도우미 열기 (채팅 화면에서 /와 동일)"},
 	{"q", "프로그램 종료"},
 	{"quit", "프로그램 종료 (:q와 동일)"},
 }

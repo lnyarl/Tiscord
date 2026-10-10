@@ -83,7 +83,7 @@ func (m *model) receiveTyping(event gatewayEvent, now time.Time) tea.Cmd {
 }
 
 func (m *model) typingLabel(now time.Time) string {
-	if m.screen != "chat" || m.showHelp || m.showConfig || !m.config.Layout.ShowTyping {
+	if m.screen != "chat" || m.showHelp || m.showConfig || m.slash.open || !m.config.Layout.ShowTyping {
 		return ""
 	}
 	var names []string

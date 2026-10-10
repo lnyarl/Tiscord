@@ -9,11 +9,13 @@ type channelListState struct {
 	query    string
 }
 type chatState struct {
-	list         channelListState
-	channel      channel
-	messages     []message
-	messageIndex int
-	historyEnd   bool
+	unreadBoundary string
+	unreadPinned   bool
+	list           channelListState
+	channel        channel
+	messages       []message
+	messageIndex   int
+	historyEnd     bool
 }
 
 func (m *model) rememberChannels() {
@@ -31,7 +33,7 @@ func (m *model) rememberChat() {
 	if m.lastChannels != nil && m.lastChannels.guild.ID == m.guild.ID {
 		list = *m.lastChannels
 	}
-	m.lastChat = &chatState{list, m.channel, append([]message{}, m.messages...), m.messageIndex, m.historyEnd}
+	m.lastChat = &chatState{m.unreadBoundary, m.unreadPinned, list, m.channel, append([]message{}, m.messages...), m.messageIndex, m.historyEnd}
 }
 
 func (m *model) returnFromList() tea.Cmd {
@@ -66,6 +68,8 @@ func (m *model) returnFromList() tea.Cmd {
 		m.messages = append([]message{}, saved.messages...)
 		m.messageIndex = saved.messageIndex
 		m.historyEnd = saved.historyEnd
+		m.unreadBoundary = saved.unreadBoundary
+		m.unreadPinned = saved.unreadPinned
 		m.draft = m.drafts[m.channel.ID]
 		m.screen = "chat"
 		m.index = 0

@@ -12,14 +12,14 @@ func commandKey(m *model, key tea.KeyPressMsg) { m.Update(key) }
 func TestCommandTabCyclesMatchesAndWraps(t *testing.T) {
 	m := openDemo(t)
 	runeKey(m, ":s")
-	for _, expected := range []string{"servers", "send", "sync", "servers"} {
+	for _, expected := range []string{"servers", "send", "sync", "slash", "servers"} {
 		commandKey(m, tea.KeyPressMsg{Code: tea.KeyTab})
 		if m.command.value() != expected {
 			t.Fatalf("wanted %s, got %s", expected, m.command.value())
 		}
 	}
 	commandKey(m, tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
-	if m.command.value() != "sync" {
+	if m.command.value() != "slash" {
 		t.Fatal("reverse completion failed")
 	}
 }
