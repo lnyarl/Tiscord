@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -46,11 +47,11 @@ type slashTimeout struct {
 func (m *model) openSlash() tea.Cmd {
 	client, ok := m.client.(slashClient)
 	if !ok || m.screen != "chat" || m.busy != "" {
-		m.status = "현재 화면에서 슬래시 명령을 열 수 없습니다"
+		m.status = m.tr("Slash commands are unavailable on this screen")
 		return nil
 	}
 	m.slashEpoch++
-	m.slash = slashState{open: true, loading: true, channelID: m.channel.ID, guildID: m.guild.ID, previousMode: m.mode, values: make(map[string]any), status: "명령 목록 불러오는 중…"}
+	m.slash = slashState{open: true, loading: true, channelID: m.channel.ID, guildID: m.guild.ID, previousMode: m.mode, values: make(map[string]any), status: m.tr("Loading commands…")}
 	m.mode = "INSERT"
 	epoch, guildID, channelID := m.slashEpoch, m.guild.ID, m.channel.ID
 	return func() tea.Msg {
@@ -96,22 +97,22 @@ func (s *slashState) resetOption() {
 		}
 	}
 }
-func (s *slashState) hint() string {
+func (s *slashState) hint(language string) string {
 	if s.status != "" {
 		return s.status
 	}
 	if s.command == nil {
-		return "문자 입력: 검색 · ↑↓/Tab: 후보 · Enter: 선택 · Esc: 닫기"
+		return localize(language, "Type to search · ↑↓/Tab: matches · Enter: select · Esc: close")
 	}
 	if option := s.option(); option != nil {
-		required := "선택 · 빈 값 Enter로 건너뛰기"
+		required := localize(language, "Optional · Enter with an empty value to skip")
 		if option.Required {
-			required = "필수"
+			required = localize(language, "Required")
 		}
-		typeName := map[int]string{3: "문자열", 4: "정수", 5: "true/false", 6: "사용자 ID", 7: "채널 ID", 8: "역할 ID", 9: "사용자/역할 ID", 10: "숫자", 11: "첨부파일 (미지원)"}[option.Type]
+		typeName := map[int]string{3: localize(language, "String"), 4: localize(language, "Integer"), 5: "true/false", 6: localize(language, "User ID"), 7: localize(language, "Channel ID"), 8: localize(language, "Role ID"), 9: localize(language, "User/role ID"), 10: localize(language, "Number"), 11: localize(language, "Attachment (unsupported)")}[option.Type]
 		return fmt.Sprintf("%s · %s · %s", required, typeName, singleLine(option.Description))
 	}
-	return "Ctrl-S: 실행 · Esc: 이전 인자 · 응답은 봇 메시지로 표시"
+	return localize(language, "Ctrl-S: run · Esc: previous argument · responses appear as bot messages")
 }
 
 func (m *model) slashKey(key tea.KeyPressMsg) tea.Cmd {
@@ -195,7 +196,7 @@ func (m *model) slashKey(key tea.KeyPressMsg) tea.Cmd {
 		} else {
 			value, err := optionValue(*option, s.input.value())
 			if err != nil {
-				s.status = err.Error()
+				s.status = m.tr(err.Error())
 				return nil
 			}
 			s.values[option.Name] = value
@@ -231,21 +232,21 @@ func (m *model) scheduleSlashAutocomplete() tea.Cmd {
 func (m *model) slashRequest(kind int) (interactionRequest, error) {
 	s := &m.slash
 	if !m.gatewayOnline || m.gatewayStopped || m.syncRequired || s.channelID != m.channel.ID {
-		return interactionRequest{}, fmt.Errorf("연결과 채널 복구를 기다려주세요")
+		return interactionRequest{}, errors.New(m.tr("Wait for connection and channel recovery"))
 	}
 	session := m.slashSession
 	if m.gateway == nil {
 		session = "offline-demo"
 	}
 	if session == "" {
-		return interactionRequest{}, fmt.Errorf("Gateway 세션 정보가 없습니다")
+		return interactionRequest{}, errors.New(m.tr("Gateway session is unavailable"))
 	}
 	focused := ""
 	var query any
 	if kind == 4 {
 		option := s.option()
 		if option == nil || !option.Autocomplete {
-			return interactionRequest{}, fmt.Errorf("자동완성 인자가 아닙니다")
+			return interactionRequest{}, errors.New(m.tr("This argument does not support autocomplete"))
 		}
 		focused = option.Name
 		query = s.input.value()
@@ -276,14 +277,14 @@ func (m *model) postSlash(request interactionRequest) tea.Cmd {
 func (m *model) submitSlash() tea.Cmd {
 	request, err := m.slashRequest(2)
 	if err != nil {
-		m.slash.status = err.Error()
+		m.slash.status = m.tr(err.Error())
 		return nil
 	}
 	m.slash.submitting = true
 	m.slash.startedAt = time.Now()
 	m.slash.created = false
 	m.slash.executionNonce = request.Nonce
-	m.slash.status = "실행 요청 중… · 자동 재전송하지 않습니다"
+	m.slash.status = m.tr("Submitting… · no automatic retries")
 	epoch := m.slashEpoch
 	return tea.Batch(m.postSlash(request), tea.Tick(15*time.Second, func(time.Time) tea.Msg { return slashTimeout{epoch, request.Nonce, false} }))
 }
@@ -296,7 +297,7 @@ func (m *model) updateSlash(msg tea.Msg) (tea.Cmd, bool) {
 		}
 		s.loading = false
 		if msg.err != nil {
-			s.status = "명령 목록 조회 실패: " + msg.err.Error()
+			s.status = m.tr("Could not load commands: ") + m.tr(msg.err.Error())
 		} else {
 			s.commands = msg.commands
 			s.status = ""
@@ -308,7 +309,7 @@ func (m *model) updateSlash(msg tea.Msg) (tea.Cmd, bool) {
 		}
 		request, err := m.slashRequest(4)
 		if err != nil {
-			s.status = err.Error()
+			s.status = m.tr(err.Error())
 			return nil, true
 		}
 		s.autocompleteNonce = request.Nonce
@@ -319,19 +320,19 @@ func (m *model) updateSlash(msg tea.Msg) (tea.Cmd, bool) {
 		}
 		if msg.autocomplete {
 			if msg.nonce == s.autocompleteNonce && msg.err != nil {
-				s.status = "자동완성 실패: " + msg.err.Error()
+				s.status = m.tr("Autocomplete failed: ") + m.tr(msg.err.Error())
 				s.autocompleteNonce = ""
 			}
 		} else if msg.nonce == s.executionNonce {
 			if msg.err != nil {
-				s.status = "실행 확인 필요: " + msg.err.Error()
+				s.status = m.tr("Execution needs verification: ") + m.tr(msg.err.Error())
 				s.submitting = false
 				s.executionNonce = ""
 			} else if m.gateway == nil {
-				m.status = "오프라인 데모 명령 실행 완료"
+				m.status = m.tr("Offline demo command completed")
 				m.closeSlash()
 			} else {
-				s.status = "요청 접수 · 봇 응답 대기 중…"
+				s.status = m.tr("Request accepted · waiting for bot response…")
 			}
 		}
 		return nil, true
@@ -340,13 +341,13 @@ func (m *model) updateSlash(msg tea.Msg) (tea.Cmd, bool) {
 			return nil, true
 		}
 		if msg.autocomplete && msg.nonce == s.autocompleteNonce {
-			s.status = "자동완성 응답 없음 · 직접 입력할 수 있습니다"
+			s.status = m.tr("No autocomplete response · enter a value manually")
 			s.autocompleteNonce = ""
 		}
 		if !msg.autocomplete && msg.nonce == s.executionNonce && s.submitting {
 			s.submitting = false
 			s.executionNonce = ""
-			s.status = "실행 결과 확인 필요 · Discord에서 확인 후 재시도해주세요"
+			s.status = m.tr("Check the result in Discord before retrying")
 		}
 		return nil, true
 	}
@@ -375,16 +376,16 @@ func (m *model) slashEvent(event gatewayEvent) {
 		switch event.kind {
 		case "INTERACTION_CREATE":
 			s.created = true
-			s.status = "Discord가 명령을 생성했습니다 · 봇 응답 대기 중…"
+			s.status = m.tr("Discord created the command · waiting for bot response…")
 			appLog.Info("slash.created", "application_id", s.command.Root.ApplicationID, "command_id", s.command.Root.ID, "elapsed_ms", time.Since(s.startedAt).Milliseconds())
 		case "INTERACTION_SUCCESS":
 			appLog.Info("slash.succeeded", "application_id", s.command.Root.ApplicationID, "command_id", s.command.Root.ID, "elapsed_ms", time.Since(s.startedAt).Milliseconds())
-			m.status = "슬래시 명령 실행 완료"
+			m.status = m.tr("Slash command completed")
 			m.closeSlash()
 		case "INTERACTION_FAILURE":
 			s.submitting = false
 			s.executionNonce = ""
-			s.status = interactionFailureLabel(data.ReasonCode)
+			s.status = interactionFailureLabel(data.ReasonCode, m.config.Behavior.Language)
 			reason := "missing"
 			if data.ReasonCode != nil {
 				reason = fmt.Sprint(*data.ReasonCode)
@@ -394,22 +395,22 @@ func (m *model) slashEvent(event gatewayEvent) {
 	}
 }
 
-func interactionFailureLabel(reason *int) string {
+func interactionFailureLabel(reason *int, language string) string {
 	if reason == nil {
-		return "Discord 명령 실행 실패 · 사유 코드 없음"
+		return localize(language, "Discord command failed · no reason code")
 	}
 	if *reason == 2 {
-		return "명령 응답 시간 초과 (코드 2) · 공식 Discord에서도 같은 명령을 확인해주세요"
+		return localize(language, "Command response timed out (code 2) · check the same command in Discord")
 	}
-	return fmt.Sprintf("Discord 명령 실행 실패 (코드 %d)", *reason)
+	return localize(language, "Discord command failed (code %d)", *reason)
 }
 func (m *model) slashLines() ([]string, int) {
 	s := &m.slash
-	lines := []string{"Discord 봇 슬래시 명령", "문자 입력: 검색 · ↑↓/Tab: 후보 · Enter: 선택 · Esc: 돌아가기", ""}
+	lines := []string{m.tr("Discord bot slash commands"), m.tr("Type to search · ↑↓/Tab: matches · Enter: select · Esc: return"), ""}
 	if s.command == nil {
 		matches := s.matches()
 		if len(matches) == 0 {
-			lines = append(lines, "명령 후보 없음 · "+s.status)
+			lines = append(lines, m.tr("No matching commands · ")+s.status)
 		}
 		for i, command := range matches {
 			prefix := "  "
@@ -428,7 +429,7 @@ func (m *model) slashLines() ([]string, int) {
 			prefix = "> "
 			target = len(lines)
 		}
-		value := "(미입력)"
+		value := m.tr("(not entered)")
 		if v, ok := s.values[option.Name]; ok {
 			value = singleLine(fmt.Sprint(v))
 		}
@@ -444,7 +445,7 @@ func (m *model) slashLines() ([]string, int) {
 		}
 	}
 	if s.option() == nil {
-		lines = append(lines, "", "입력 내용을 확인하고 Ctrl-S로 실행")
+		lines = append(lines, "", m.tr("Review the arguments and press Ctrl-S to run"))
 		target = len(lines) - 1
 	}
 	return lines, target

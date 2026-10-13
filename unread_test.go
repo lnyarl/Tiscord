@@ -60,7 +60,7 @@ func TestEnterRestoresOldestUnreadAcrossHistoryPages(t *testing.T) {
 		t.Fatal("channel entry marked messages read")
 	}
 	lines, _ := m.body()
-	if strings.Count(strings.Join(lines, "\n"), "여기부터 새 메시지") != 1 || !strings.Contains(m.View().Content, "여기부터 새 메시지") {
+	if strings.Count(strings.Join(lines, "\n"), "New messages below") != 1 || !strings.Contains(m.View().Content, "New messages below") {
 		t.Fatal("unread separator absent")
 	}
 	if strings.Count(strings.Join(lines, "\n"), "alice") != 2 {
@@ -130,7 +130,7 @@ func TestExplicitLatestNavigationMarksReadAndFailureKeepsPosition(t *testing.T) 
 	m.unreadBoundary = "1"
 	m.unreadPinned = true
 	runCommand(m, m.key(tea.KeyPressMsg{Code: 'G', Text: "G"}))
-	if m.readIDs["10"] != "1" || !m.unreadPinned || !strings.Contains(m.status, "실패") {
+	if m.readIDs["10"] != "1" || !m.unreadPinned || !strings.Contains(m.status, "Could not save") {
 		t.Fatal("failed save advanced read state")
 	}
 }

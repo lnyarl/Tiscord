@@ -9,6 +9,7 @@ import (
 
 func TestNormalUsesBaseKeyWhileInsertKeepsKoreanText(t *testing.T) {
 	m := openDemo(t)
+	m.height = 4
 	m.messages = append(m.messages, message{ID: "2", ChannelID: "10"})
 	m.messageIndex = 0
 	m.Update(tea.KeyPressMsg{Code: 'ㅓ', Text: "ㅓ", BaseCode: 'j'})
@@ -108,6 +109,7 @@ func TestTerminalProtocolPreservesPhysicalJAlongsideKorean(t *testing.T) {
 		}
 		m := openDemo(t)
 		m.messages = append(m.messages, message{ID: "2"})
+		m.height = 4
 		m.messageIndex = 0
 		m.Update(tea.KeyPressMsg(key))
 		if m.messageIndex != 1 {
@@ -118,6 +120,7 @@ func TestTerminalProtocolPreservesPhysicalJAlongsideKorean(t *testing.T) {
 
 func TestKoreanNormalFallbackWithoutPhysicalKey(t *testing.T) {
 	m := openDemo(t)
+	m.height = 4
 	m.messages = append(m.messages, message{ID: "2"}, message{ID: "3"})
 	m.messageIndex = 0
 	m.Update(tea.KeyPressMsg{Code: 'ㅓ', Text: "ㅓ"})

@@ -37,7 +37,7 @@ func runeKey(m *model, text string) {
 func TestVimUnicodeMultilineAndFooter(t *testing.T) {
 	m := openDemo(t)
 	runeKey(m, "i안녕하세요")
-	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
 	runeKey(m, "둘째 줄")
 	if m.draft.value() != "안녕하세요\n둘째 줄" {
 		t.Fatal(m.draft.value())
@@ -85,6 +85,11 @@ func TestChannelSearchAndDrafts(t *testing.T) {
 	}
 	m.draft.set("dev 초안")
 	m.execute("channels")
+	if m.items()[m.index].ID != "11" {
+		t.Fatal("current channel focus lost")
+	}
+	runeKey(m, "/general")
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	runCommand(m, m.selectItem())
 	if m.draft.value() != "general 초안" {
 		t.Fatal("draft lost")
@@ -247,9 +252,9 @@ func TestTerminalProgramKeyboardFlow(t *testing.T) {
 	await(func(s uiSnapshot) bool { return s.screen == "chat" })
 	program.Send(tea.KeyPressMsg{Text: "i"})
 	program.Send(tea.KeyPressMsg{Text: "안녕하세요"})
-	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
 	program.Send(tea.KeyPressMsg{Text: "둘째 줄"})
-	program.Send(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	await(func(s uiSnapshot) bool {
 		return s.status == "Sent" && s.count == 2 && s.content == "안녕하세요\n둘째 줄"
 	})

@@ -21,10 +21,14 @@ type guild struct {
 	Name string `json:"name"`
 }
 type channel struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Type     int    `json:"type"`
-	Position int    `json:"position"`
+	Recipients    []author `json:"recipients,omitempty"`
+	RecipientIDs  []string `json:"recipient_ids,omitempty"`
+	GuildID       string   `json:"guild_id,omitempty"`
+	LastMessageID string   `json:"last_message_id,omitempty"`
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Type          int      `json:"type"`
+	Position      int      `json:"position"`
 }
 type author struct {
 	ID         string `json:"id"`
@@ -282,8 +286,8 @@ type demoClient struct {
 func newDemo() *demoClient {
 	stamp := time.Date(2026, 10, 9, 14, 32, 0, 0, time.Local)
 	return &demoClient{next: 3, data: map[string][]message{
-		"10": {{ID: "1", ChannelID: "10", Content: "안녕하세요. i로 입력하고 Ctrl-S로 전송하세요.", Timestamp: stamp, Author: author{ID: "100", Username: "alice"}}},
-		"11": {{ID: "2", ChannelID: "11", Content: "Esc로 Normal 모드. :channels로 채널을 바꿉니다.", Timestamp: stamp, Author: author{ID: "101", Username: "bob"}}},
+		"10": {{ID: "1", ChannelID: "10", Content: "Welcome. Press i to write and Enter to send.", Timestamp: stamp, Author: author{ID: "100", Username: "alice"}}},
+		"11": {{ID: "2", ChannelID: "11", Content: "Esc returns to Normal mode. Use :channels to switch channels.", Timestamp: stamp, Author: author{ID: "101", Username: "bob"}}},
 	}}
 }
 func (c *demoClient) Guilds(context.Context) ([]guild, error) {

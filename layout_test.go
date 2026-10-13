@@ -61,9 +61,8 @@ func TestMessageGroupingKeepsIndividualScrollTargets(t *testing.T) {
 	if strings.Count(strings.Join(lines, "\n"), "alice") != 2 {
 		t.Fatal("grouping jumped across another author")
 	}
-	indent := strings.Repeat(" ", len("14:32 alice  "))
-	if !strings.HasPrefix(lines[1], indent) || !strings.HasPrefix(lines[2], indent+"second") {
-		t.Fatalf("continuation indentation missing: %q", lines)
+	if lines[1] != "more" || lines[2] != "second" {
+		t.Fatalf("continuations were padded instead of preserving text: %q", lines)
 	}
 }
 

@@ -9,10 +9,12 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 )
 
 type config struct {
 	Behavior struct {
+		Language           string `json:"language"`
 		GroupMessages      bool   `json:"group_messages"`
 		GroupWindowSeconds int    `json:"group_window_seconds"`
 		SendKey            string `json:"send_key"`
@@ -30,6 +32,7 @@ type config struct {
 		InputGapLines   int    `json:"input_gap_lines"`
 		ShowMetadata    bool   `json:"show_metadata"`
 		ShowTyping      bool   `json:"show_typing"`
+		ShowActivity    bool   `json:"show_activity"`
 	} `json:"layout"`
 	Logging struct {
 		Level string `json:"level"`
@@ -38,9 +41,10 @@ type config struct {
 
 func defaultConfig() config {
 	var c config
+	c.Behavior.Language = "en"
 	c.Behavior.GroupMessages = true
 	c.Behavior.GroupWindowSeconds = 300
-	c.Behavior.SendKey = "ctrl+s"
+	c.Behavior.SendKey = "enter"
 	c.Behavior.StartMode = "normal"
 	c.Behavior.KoreanShortcuts = true
 	c.Behavior.RestoreUnread = true
@@ -52,12 +56,15 @@ func defaultConfig() config {
 	c.Layout.InputGapLines = 1
 	c.Layout.ShowMetadata = true
 	c.Layout.ShowTyping = true
+	c.Layout.ShowActivity = true
 	c.Logging.Level = "debug"
 	return c
 }
 
 func (c config) validate() error {
 	switch {
+	case !slices.Contains(supportedLanguages, c.Behavior.Language):
+		return errors.New("behavior.language must be en, ko, ja, zh-CN, es or de")
 	case !validLayout(c.Layout.Style):
 		return errors.New("layout.style must be plain, log or editor")
 	case c.Layout.AuthorName != "username" && c.Layout.AuthorName != "display":

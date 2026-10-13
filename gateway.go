@@ -15,6 +15,7 @@ import (
 )
 
 type gatewayEvent struct {
+	channels   []channel
 	readStates []readState
 	kind       string
 	data       json.RawMessage
@@ -199,27 +200,50 @@ func (g *gateway) connect(ctx context.Context) error {
 			subscriptionTimer.Stop()
 		}
 	}()
-	lastGuild := ""
+	monitoredGuilds := make(map[string]bool)
+	subscribedGuilds := make(map[string]bool)
 	subscribe := func() error {
 		g.mu.Lock()
 		current := g.watch
 		g.mu.Unlock()
-		if current.guildID == "" && lastGuild == "" {
-			return nil
-		}
-		subs := map[string]any{}
-		if lastGuild != "" && lastGuild != current.guildID {
-			subs[lastGuild] = map[string]any{"typing": false, "threads": false, "activities": false, "channels": map[string]any{}}
+		desired := make(map[string]bool)
+		for id := range monitoredGuilds {
+			desired[id] = true
 		}
 		if current.guildID != "" {
-			// In the user protocol, typing=true also enables the guild event stream.
-			// No member-list ranges are requested: chat does not need member scraping.
-			subs[current.guildID] = map[string]any{"typing": true, "threads": false, "activities": false, "channels": map[string]any{}}
+			desired[current.guildID] = true
 		}
-		lastGuild = current.guildID
-		if err := send(37, map[string]any{"subscriptions": subs}); err != nil {
-			return err
+		subs := map[string]any{}
+		for id := range subscribedGuilds {
+			if !desired[id] {
+				subs[id] = map[string]any{"typing": false, "threads": false, "activities": false, "channels": map[string]any{}}
+			}
 		}
+		for id := range desired {
+			if !subscribedGuilds[id] {
+				// typing=true enables the user guild event stream; no member ranges are requested.
+				subs[id] = map[string]any{"typing": true, "threads": false, "activities": false, "channels": map[string]any{}}
+			}
+		}
+		if len(subs) > 0 {
+			// Keep each Gateway payload below its size limit for accounts with many guilds.
+			batch := make(map[string]any)
+			for id, value := range subs {
+				batch[id] = value
+				if len(batch) == 20 {
+					if err := send(37, map[string]any{"subscriptions": batch}); err != nil {
+						return err
+					}
+					batch = make(map[string]any)
+				}
+			}
+			if len(batch) > 0 {
+				if err := send(37, map[string]any{"subscriptions": batch}); err != nil {
+					return err
+				}
+			}
+		}
+		subscribedGuilds = desired
 		appLog.Info("gateway.subscribed", "guild_id", current.guildID, "channel_id", current.channelID)
 		if current.applied != nil {
 			select {
@@ -292,15 +316,48 @@ func (g *gateway) connect(ctx context.Context) error {
 			case 0:
 				if p.Type == "READY" {
 					var data struct {
-						Session    string          `json:"session_id"`
-						URL        string          `json:"resume_gateway_url"`
-						User       author          `json:"user"`
-						ReadStates json.RawMessage `json:"read_state"`
+						Session         string          `json:"session_id"`
+						URL             string          `json:"resume_gateway_url"`
+						User            author          `json:"user"`
+						ReadStates      json.RawMessage `json:"read_state"`
+						PrivateChannels []channel       `json:"private_channels"`
+						Users           []author        `json:"users"`
+						Guilds          []struct {
+							ID       string    `json:"id"`
+							Channels []channel `json:"channels"`
+						} `json:"guilds"`
 					}
 					if err := json.Unmarshal(p.Data, &data); err != nil {
 						return err
 					}
 					g.session = data.Session
+					channels := append([]channel{}, data.PrivateChannels...)
+					users := make(map[string]author, len(data.Users))
+					for _, user := range data.Users {
+						users[user.ID] = user
+					}
+					for i := range channels {
+						if len(channels[i].Recipients) > 0 {
+							continue
+						}
+						for _, id := range channels[i].RecipientIDs {
+							user, ok := users[id]
+							if !ok {
+								user = author{ID: id}
+							}
+							channels[i].Recipients = append(channels[i].Recipients, user)
+						}
+					}
+					for _, guild := range data.Guilds {
+						if guild.ID == "" {
+							continue
+						}
+						monitoredGuilds[guild.ID] = true
+						for _, item := range guild.Channels {
+							item.GuildID = guild.ID
+							channels = append(channels, item)
+						}
+					}
 					resume, err := url.Parse(data.URL)
 					if err == nil && resume.Scheme == "wss" && (resume.Hostname() == "gateway.discord.gg" || strings.HasSuffix(resume.Hostname(), ".discord.gg")) {
 						g.resumeURL = data.URL
@@ -309,14 +366,14 @@ func (g *gateway) connect(ctx context.Context) error {
 					if err := subscribe(); err != nil {
 						return err
 					}
-					g.emit(ctx, gatewayEvent{status: "Gateway connected", fresh: true, selfUserID: data.User.ID, sessionID: data.Session, readStates: decodeReadStates(data.ReadStates)})
+					g.emit(ctx, gatewayEvent{status: "Gateway connected", fresh: true, selfUserID: data.User.ID, sessionID: data.Session, readStates: decodeReadStates(data.ReadStates), channels: channels})
 				} else if p.Type == "RESUMED" {
 					ready = true
 					if err := subscribe(); err != nil {
 						return err
 					}
 					g.emit(ctx, gatewayEvent{status: "Gateway resumed", sessionID: g.session})
-				} else if strings.HasPrefix(p.Type, "MESSAGE_") || p.Type == "TYPING_START" || p.Type == "APPLICATION_COMMAND_AUTOCOMPLETE_RESPONSE" || p.Type == "INTERACTION_CREATE" || p.Type == "INTERACTION_SUCCESS" || p.Type == "INTERACTION_FAILURE" {
+				} else if strings.HasPrefix(p.Type, "MESSAGE_") || p.Type == "CHANNEL_CREATE" || p.Type == "CHANNEL_UPDATE" || p.Type == "CHANNEL_DELETE" || p.Type == "TYPING_START" || p.Type == "APPLICATION_COMMAND_AUTOCOMPLETE_RESPONSE" || p.Type == "INTERACTION_CREATE" || p.Type == "INTERACTION_SUCCESS" || p.Type == "INTERACTION_FAILURE" {
 					g.emit(ctx, gatewayEvent{kind: p.Type, data: p.Data})
 				}
 			}

@@ -23,11 +23,11 @@ func TestTypingShowsCurrentChannelAndIgnoresSelf(t *testing.T) {
 		t.Fatal("self or another channel is shown")
 	}
 	m.receiveTyping(typingEvent("10", "100", "alice"), now)
-	if m.typingLabel(now) != "alice 입력 중…" || !strings.Contains(m.View().Content, "alice 입력 중…") {
+	if m.typingLabel(now) != "alice is typing…" || !strings.Contains(m.View().Content, "alice is typing…") {
 		t.Fatal("typing indication missing")
 	}
 	m.config.Layout.ShowTyping = false
-	if strings.Contains(m.View().Content, "입력 중…") {
+	if strings.Contains(m.View().Content, "is typing…") {
 		t.Fatal("typing setting ignored")
 	}
 }
@@ -76,7 +76,7 @@ func TestTypingNamesMultipleUsersAndSmallTerminal(t *testing.T) {
 	for _, user := range []struct{ id, name string }{{"103", "carol"}, {"100", "alice"}, {"101", "bob"}} {
 		m.receiveTyping(typingEvent("10", user.id, user.name), now)
 	}
-	if m.typingLabel(now) != "alice, bob 외 1명 입력 중…" {
+	if m.typingLabel(now) != "alice, bob and 1 more are typing…" {
 		t.Fatal(m.typingLabel(now))
 	}
 	m.height = 4
@@ -97,7 +97,7 @@ func TestOldTypingEventIsIgnoredAndNicknamePreferred(t *testing.T) {
 	}
 	e := event("TYPING_START", map[string]any{"channel_id": "10", "user_id": "100", "member": map[string]any{"nick": "별명", "user": map[string]any{"username": "alice", "global_name": "Alice"}}})
 	m.receiveTyping(e, now)
-	if m.typingLabel(now) != "별명 입력 중…" {
+	if m.typingLabel(now) != "별명 is typing…" {
 		t.Fatal("nickname was not used")
 	}
 }
@@ -127,7 +127,7 @@ func TestTypingPrefersUsernameAndUsesCachedUsername(t *testing.T) {
 		e := event("TYPING_START", map[string]any{"channel_id": "10", "user_id": "100", "member": map[string]any{"nick": "서버별명", "user": user}})
 		now := time.Now()
 		m.receiveTyping(e, now)
-		if m.typingLabel(now) != "alice 입력 중…" {
+		if m.typingLabel(now) != "alice is typing…" {
 			t.Fatalf("username missing (included=%t): %s", includeUsername, m.typingLabel(now))
 		}
 	}

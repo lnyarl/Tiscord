@@ -98,12 +98,12 @@ func TestSlashWizardPreservesDraftAndValidatesBeforePreview(t *testing.T) {
 	m.draft.set("keep draft")
 	m.messageIndex = 0
 	runCommand(m, m.key(tea.KeyPressMsg{Code: '/', Text: "/"}))
-	if !m.slash.open || !strings.Contains(m.View().Content, "Discord 봇 슬래시 명령") || strings.Contains(m.View().Content, "keep draft") {
+	if !m.slash.open || !strings.Contains(m.View().Content, "Discord bot slash commands") || strings.Contains(m.View().Content, "keep draft") {
 		t.Fatal("slash chooser did not open separately")
 	}
 	m.key(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m.key(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if m.slash.optionIndex != 0 || !strings.Contains(m.slash.status, "입력") {
+	if m.slash.optionIndex != 0 || !strings.Contains(m.slash.status, "Enter") {
 		t.Fatal("required argument skipped")
 	}
 	m.Update(tea.PasteMsg{Content: "hello"})
@@ -182,7 +182,7 @@ func TestSlashExecutionGuardAndTimeout(t *testing.T) {
 		t.Fatal("duplicate execution allowed")
 	}
 	m.Update(slashTimeout{m.slashEpoch, m.slash.executionNonce, false})
-	if m.slash.submitting || !strings.Contains(m.slash.status, "확인") {
+	if m.slash.submitting || !strings.Contains(m.slash.status, "Check the result") {
 		t.Fatal("timeout did not preserve review")
 	}
 	m.closeSlash()
@@ -233,10 +233,10 @@ func TestSlashFailureExplainsTimeoutAndRecordsCreation(t *testing.T) {
 		t.Fatal("creation treated as completion")
 	}
 	m.slashEvent(event("INTERACTION_FAILURE", map[string]any{"nonce": "n", "reason_code": 2}))
-	if m.slash.submitting || !strings.Contains(m.slash.status, "시간 초과") || !m.slash.open {
+	if m.slash.submitting || !strings.Contains(m.slash.status, "timed out") || !m.slash.open {
 		t.Fatal("timeout not explained or lost input")
 	}
-	if label := interactionFailureLabel(nil); !strings.Contains(label, "코드 없음") {
+	if label := interactionFailureLabel(nil, "en"); !strings.Contains(label, "no reason code") {
 		t.Fatal("missing reason fabricated")
 	}
 }
@@ -284,7 +284,7 @@ func TestSlashAutocompleteDebounceAndExecutionSuccess(t *testing.T) {
 		t.Fatal("unrelated execution closed wizard")
 	}
 	m.slashEvent(event("INTERACTION_SUCCESS", map[string]any{"nonce": "execute"}))
-	if m.slash.open || !strings.Contains(m.status, "완료") {
+	if m.slash.open || !strings.Contains(m.status, "completed") {
 		t.Fatal("successful execution not shown")
 	}
 }

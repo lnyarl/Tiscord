@@ -91,7 +91,7 @@ func TestQuestionHelpShowsCommandsAndPreservesChat(t *testing.T) {
 			t.Fatalf("missing command %s", command.name)
 		}
 	}
-	if !strings.Contains(m.View().Content, "사용 가능한 명령어") {
+	if !strings.Contains(m.View().Content, "Available commands") {
 		t.Fatal("help is scrolled to bottom on opening")
 	}
 	commandKey(m, tea.KeyPressMsg{Code: tea.KeyEsc})

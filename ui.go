@@ -29,6 +29,12 @@ type sent struct {
 }
 type streamClosed struct{}
 type model struct {
+	serverFocus                                          listFocus
+	channelFocus                                         map[string]listFocus
+	chatScrolling                                        bool
+	chatOffset                                           int
+	privateChannels                                      []channel
+	activity                                             map[string]channelActivity
 	readWanted                                           map[string]string
 	unreadAwaiting                                       bool
 	readIDs                                              map[string]string
@@ -81,7 +87,11 @@ func newModel(ctx context.Context, client chatClient, g *gateway) *model {
 	if g != nil {
 		connection = "Gateway connecting"
 	}
-	return &model{ctx: ctx, client: client, gateway: g, screen: "servers", mode: "NORMAL", status: "Loading", connection: connection, busy: "servers", width: 80, height: 24, drafts: map[string]editor{}, config: defaultConfig(), typists: map[string]typist{}, gatewayOnline: g == nil, readIDs: make(map[string]string), readPending: make(map[string]string), readWanted: make(map[string]string)}
+	m := &model{ctx: ctx, client: client, gateway: g, screen: "servers", mode: "NORMAL", status: "Loading", connection: connection, busy: "servers", width: 80, height: 24, drafts: map[string]editor{}, config: defaultConfig(), typists: map[string]typist{}, gatewayOnline: g == nil, readIDs: make(map[string]string), readPending: make(map[string]string), readWanted: make(map[string]string)}
+	if _, ok := client.(*demoClient); ok {
+		m.privateChannels = []channel{{ID: "12", Type: 1, Recipients: []author{{ID: "100", Username: "alice"}}}}
+	}
+	return m
 }
 func (m *model) Init() tea.Cmd {
 	load := func() tea.Msg {
@@ -115,8 +125,12 @@ func (m *model) items() []channel {
 		for _, s := range m.servers {
 			items = append(items, channel{ID: s.ID, Name: s.Name})
 		}
+		items = append(items, channel{ID: "@me", Name: "DM"})
 	} else {
 		items = m.channels
+		if m.guild.Name == "DM" && m.guild.ID == "" {
+			items = m.dmChannels()
+		}
 	}
 	var result []channel
 	for _, item := range items {
@@ -143,7 +157,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			delete(m.readPending, msg.channelID)
 		}
 		if msg.err != nil {
-			m.status = "읽음 위치 저장 실패: " + msg.err.Error()
+			m.status = m.tr("Could not save read position: ") + m.tr(msg.err.Error())
 			appLog.Warn("read.save_failed", "channel_id", msg.channelID, "error", msg.err)
 		} else {
 			if current := m.readIDs[msg.channelID]; current == "" || snowflakeLess(current, msg.messageID) {
@@ -154,7 +168,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.firstUnread() < 0 {
 					m.unreadPinned = false
 				}
-				m.status = "읽음 위치 저장 완료"
+				m.status = m.tr("Read position saved")
 			}
 		}
 		if wanted := m.readWanted[msg.channelID]; wanted != "" {
@@ -172,13 +186,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseWheelMsg:
 		if m.screen == "chat" && m.entry == "" && !m.showHelp && !m.showConfig && !m.slash.open && len(m.messages) > 0 {
 			if msg.Button == tea.MouseWheelUp {
-				m.messageIndex = max(0, m.messageIndex-1)
+				return m, m.scrollChat(-1)
 			}
 			if msg.Button == tea.MouseWheelDown {
-				m.messageIndex = min(len(m.messages)-1, m.messageIndex+1)
-				if m.messageIndex == len(m.messages)-1 {
-					return m, m.markRead()
-				}
+				return m, m.scrollChat(1)
 			}
 		}
 	case tea.KeyboardEnhancementsMsg:
@@ -208,6 +219,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.connectionEpoch++
 		clear(m.typists)
 	case gatewayEvent:
+		var dmFocus *listFocus
+		if m.screen == "channels" && m.listKey() == "@me" {
+			focus := m.captureFocus()
+			dmFocus = &focus
+		}
+		m.observePrivateChannels(msg)
+		if dmFocus != nil {
+			m.restoreFocus(*dmFocus, "")
+		}
+		m.observeActivity(msg)
 		if m.receiveReadState(msg) {
 			return m, m.nextEvent()
 		}
@@ -247,6 +268,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if msg.kind != "" {
+			if strings.HasPrefix(msg.kind, "MESSAGE_") {
+				var identity struct {
+					ChannelID string `json:"channel_id"`
+				}
+				if json.Unmarshal(msg.data, &identity) != nil || identity.ChannelID != m.channel.ID {
+					return m, m.nextEvent()
+				}
+			}
 			if m.busy == "chat" || m.busy == "older" || m.busy == "sync" {
 				m.pending = append(m.pending, msg)
 			} else {
@@ -263,7 +292,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err != nil {
 			appLog.Error("ui.load_failed", "kind", msg.kind, "error", msg.err.Error())
-			m.status = msg.kind + ": " + msg.err.Error()
+			m.status = msg.kind + ": " + m.tr(msg.err.Error())
 			if msg.kind == "sync" {
 				for _, event := range m.pending {
 					m.applyEvent(event)
@@ -277,13 +306,24 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch msg.kind {
 		case "servers":
+			if m.screen == "servers" && len(m.servers) > 0 {
+				m.rememberServers()
+			}
 			m.servers = msg.guilds
+			if m.screen == "servers" {
+				m.restoreFocus(m.serverFocus, "")
+			}
 			m.status = "Select a server"
 		case "channels":
 			m.channels = msg.channels
+			for _, item := range msg.channels {
+				if item.GuildID == "" {
+					item.GuildID = m.guild.ID
+				}
+				m.registerActivityChannel(item)
+			}
 			m.screen = "channels"
-			m.query = ""
-			m.index = 0
+			m.restoreChannelFocus("")
 			m.status = "Select a channel"
 			m.rememberChannels()
 		case "chat":
@@ -329,13 +369,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pending = nil
 		case "sync":
 			anchor := ""
-			following := m.messageIndex >= len(m.messages)-1 && !m.unreadPinned
+			following := m.chatAtLatest()
 			if len(m.messages) > 0 {
 				anchor = m.messages[m.messageIndex].ID
 			}
 			m.messages = mergeMessages(nil, msg.messages)
 			m.messageIndex = min(m.messageIndex, max(0, len(m.messages)-1))
 			if following {
+				m.chatScrolling = false
+				m.chatOffset = 0
 				m.messageIndex = max(0, len(m.messages)-1)
 			} else {
 				for i, item := range m.messages {
@@ -350,7 +392,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.pending = nil
 			m.syncRequired = false
-			m.status = "복구 완료 · 전송 가능"
+			m.status = m.tr("Recovery complete · sending available")
 			if m.unreadAwaiting {
 				m.unreadBoundary = m.readIDs[m.channel.ID]
 				m.restoreUnread()
@@ -366,10 +408,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.busy = ""
 		if msg.err != nil {
 			appLog.Error("ui.send_failed", "error", msg.err.Error())
-			m.status = "send: " + msg.err.Error()
+			m.status = "send: " + m.tr(msg.err.Error())
 		} else {
 			m.messages = mergeMessages(m.messages, []message{msg.message})
 			m.messageIndex = len(m.messages) - 1
+			m.chatScrolling = false
+			m.chatOffset = 0
 			m.draft.set("")
 			m.status = "Sent"
 		}
@@ -476,18 +520,22 @@ func (m *model) key(key tea.KeyPressMsg) tea.Cmd {
 	previous := m.prefix
 	m.prefix = ""
 	switch name {
+	case "ctrl+o":
+		if m.screen == "chat" {
+			return m.execute("channels")
+		}
+		if m.screen == "channels" {
+			return m.execute("servers")
+		}
 	case "j", "down":
 		if m.screen == "chat" {
-			m.messageIndex = min(max(0, len(m.messages)-1), m.messageIndex+1)
-			if m.messageIndex == len(m.messages)-1 {
-				return m.markRead()
-			}
+			return m.scrollChat(1)
 		} else {
 			m.index = min(max(0, len(m.items())-1), m.index+1)
 		}
 	case "k", "up":
 		if m.screen == "chat" {
-			m.messageIndex = max(0, m.messageIndex-1)
+			return m.scrollChat(-1)
 		} else {
 			m.index = max(0, m.index-1)
 		}
@@ -495,13 +543,17 @@ func (m *model) key(key tea.KeyPressMsg) tea.Cmd {
 		if previous == "g" {
 			m.index = 0
 			m.messageIndex = 0
+			m.chatScrolling = true
+			m.chatOffset = 0
 		} else {
 			m.prefix = "g"
 		}
 	case "G":
 		m.index = max(0, len(m.items())-1)
 		m.messageIndex = max(0, len(m.messages)-1)
+		m.chatScrolling = false
 		if m.screen == "chat" {
+			m.chatEnd()
 			return m.markRead()
 		}
 	case ":":
@@ -569,6 +621,10 @@ func (m *model) selectItem() tea.Cmd {
 	item := items[min(m.index, len(items)-1)]
 	appLog.Info("ui.select", "screen", m.screen, "id", item.ID)
 	if m.screen == "servers" {
+		m.rememberServers()
+		if item.ID == "@me" {
+			return m.execute("dm")
+		}
 		m.guild = guild{ID: item.ID, Name: item.Name}
 		m.busy = "channels"
 		m.status = "Loading"
@@ -585,6 +641,9 @@ func (m *model) selectItem() tea.Cmd {
 	clear(m.typists)
 	m.syncRequired = false
 	m.channel = item
+	m.chatScrolling = false
+	m.chatOffset = 0
+	m.registerActivityChannel(item)
 	m.unreadBoundary = ""
 	m.unreadPinned = false
 	m.unreadAwaiting = m.gateway != nil && !m.hadConnection
@@ -678,28 +737,43 @@ func (m *model) execute(command string) tea.Cmd {
 	}
 	m.showHelp = false
 	switch command {
-	case "channels", "servers":
-		if command == "channels" && m.guild.ID == "" {
+	case "dm", "channels", "servers":
+		if command == "channels" && m.guild.ID == "" && m.guild.Name != "DM" {
 			m.status = "Select a server first"
 			return nil
 		}
+		channelID, serverID := "", m.listKey()
 		if m.screen == "chat" {
+			channelID = m.channel.ID
 			m.rememberChat()
 		} else if m.screen == "channels" {
 			m.rememberChannels()
+		} else if m.screen == "servers" {
+			m.rememberServers()
 		}
 		m.saveDraft()
 		clear(m.typists)
 		m.channel = channel{}
 		m.draft.set("")
 		m.screen = command
-		m.index = 0
-		m.query = ""
-		if command == "channels" {
+		if command == "dm" {
+			m.guild = guild{Name: "DM"}
+			m.channels = m.dmChannels()
+			m.screen = "channels"
+			if m.gateway != nil {
+				m.gateway.Watch("", "")
+			}
+		}
+		if command == "channels" || command == "dm" {
+			if command == "dm" && serverID != "@me" {
+				channelID = ""
+			}
+			m.restoreChannelFocus(channelID)
 			m.rememberChannels()
 		}
 		if command == "servers" {
 			m.guild = guild{}
+			m.restoreFocus(m.serverFocus, serverID)
 			if m.gateway != nil {
 				m.gateway.Watch("", "")
 			}
@@ -710,7 +784,7 @@ func (m *model) execute(command string) tea.Cmd {
 		return m.older()
 	case "sync":
 		if !m.gatewayOnline {
-			m.status = "연결 복구를 기다려주세요. 초안을 유지합니다"
+			m.status = m.tr("Waiting for reconnection. Your draft is preserved")
 			return nil
 		}
 		return m.startSync()
@@ -721,11 +795,11 @@ func (m *model) execute(command string) tea.Cmd {
 }
 func (m *model) send() tea.Cmd {
 	if text := strings.TrimSpace(m.draft.value()); strings.HasPrefix(text, "/") && !strings.HasPrefix(text, "//") {
-		m.status = "슬래시 명령은 / 또는 :slash 입력 도우미에서 실행해주세요"
+		m.status = m.tr("Use / or :slash to run slash commands")
 		return nil
 	}
 	if m.gateway != nil && (!m.gatewayOnline || m.gatewayStopped || m.syncRequired) {
-		m.status = "전송 불가 · 연결 및 메시지 복구를 기다려주세요"
+		m.status = m.tr("Sending unavailable · waiting for connection and message recovery")
 		appLog.Warn("ui.send_blocked", "online", m.gatewayOnline, "sync_required", m.syncRequired)
 		return nil
 	}
@@ -759,7 +833,7 @@ func (m *model) applyEvent(event gatewayEvent) {
 	}
 	appLog.Debug("ui.message_applied", "event", event.kind, "channel_id", identity.ChannelID, "message_id", identity.ID)
 	anchor := ""
-	following := m.messageIndex >= len(m.messages)-1 && !m.unreadPinned
+	following := m.chatAtLatest()
 	if following && event.kind == "MESSAGE_CREATE" && m.unreadBoundary == "" {
 		m.unreadBoundary = "0"
 		if len(m.messages) > 0 {
@@ -809,6 +883,8 @@ func (m *model) applyEvent(event gatewayEvent) {
 		m.messages = kept
 	}
 	if following {
+		m.chatScrolling = false
+		m.chatOffset = 0
 		m.messageIndex = max(0, len(m.messages)-1)
 		if event.kind == "MESSAGE_CREATE" && m.firstUnread() >= 0 {
 			m.messageIndex = m.firstUnread()
@@ -836,26 +912,63 @@ func (m *model) body() ([]string, int) {
 		return lines, min(m.helpLine, len(lines)-1)
 	}
 	if m.screen != "chat" {
-		lines := []string{strings.ToUpper(m.screen) + "   / search · j/k move · Enter select", ""}
+		lines := []string{m.tr(strings.ToUpper(m.screen)) + m.tr("   / search · j/k move · Enter select"), ""}
+		if m.screen == "channels" && m.guild.ID == "" && m.guild.Name == "DM" {
+			lines[0] = "DM" + m.tr("   / search · j/k move · Enter select")
+		}
 		for i, item := range m.items() {
 			prefix := "  "
 			if i == m.index {
 				prefix = "> "
 			}
 			if m.screen == "channels" {
+				marker := " "
+				if m.config.Layout.ShowActivity && m.channelHasUnread(item.ID) {
+					marker = "\x1b[36m●\x1b[0m"
+					if item.Type == 1 || item.Type == 3 {
+						marker = "\x1b[33m○\x1b[0m"
+					}
+				}
+				prefix += marker + " "
+			}
+			if m.screen == "channels" && m.guild.ID != "" {
 				prefix += "#"
 			}
 			lines = append(lines, ansi.Truncate(prefix+singleLine(item.Name), m.width, ""))
 		}
 		if len(lines) == 2 {
-			lines = append(lines, "No matching servers or channels")
+			lines = append(lines, m.tr("No matching servers or channels"))
 		}
 		return lines, m.index + 2
 	}
+	lines, target, _ := m.chatBody()
+	return lines, target
+}
+
+type chatLogicalLine struct {
+	start, end int
+	text       string
+}
+type chatLayout struct {
+	rows      []string
+	target    int
+	positions []int
+	logical   []chatLogicalLine
+}
+
+func (m *model) chatBody() ([]string, int, []int) {
+	result := m.layoutChat()
+	return result.rows, result.target, result.positions
+}
+
+func (m *model) layoutChat() chatLayout {
 	if len(m.messages) == 0 {
-		return []string{"No messages yet. Press i to write."}, 0
+		text := m.tr("No messages yet. Press i to write.")
+		rows := wrapMessageLine(text, m.width)
+		return chatLayout{rows: rows, logical: []chatLogicalLine{{0, len(rows), linkMessageURLs(text)}}}
 	}
 	var lines []string
+	positions := make([]int, len(m.messages))
 	target := 0
 	groupPrefix := ""
 	firstUnread := m.firstUnread()
@@ -863,13 +976,26 @@ func (m *model) body() ([]string, int) {
 	gutter := 0
 	if m.config.Layout.Style == "editor" && m.width > 8 {
 		gutter = 6
-		wrapWidth -= gutter
+	}
+	lineNumber := 0
+	var logical []chatLogicalLine
+	appendLines := func(text string) {
+		for _, logicalLine := range strings.Split(text, "\n") {
+			lineNumber++
+			if gutter > 0 {
+				logicalLine = fmt.Sprintf("%4d  %s", lineNumber, logicalLine)
+			}
+			start := len(lines)
+			lines = append(lines, wrapMessageLine(logicalLine, wrapWidth)...)
+			logical = append(logical, chatLogicalLine{start, len(lines), linkMessageURLs(logicalLine)})
+		}
 	}
 	for i, item := range m.messages {
+		positions[i] = len(lines)
 		unreadStart := i == firstUnread
 		unreadLine := len(lines)
 		if unreadStart {
-			lines = append(lines, "── 여기부터 새 메시지 ──")
+			appendLines(m.tr("── New messages below ──"))
 		}
 		grouped := false
 		if i > 0 {
@@ -881,7 +1007,7 @@ func (m *model) body() ([]string, int) {
 			}
 			if !grouped {
 				for n := 0; n < m.config.Layout.GroupSpacing; n++ {
-					lines = append(lines, "")
+					appendLines("")
 				}
 			}
 		}
@@ -911,28 +1037,28 @@ func (m *model) body() ([]string, int) {
 				}
 			}
 		}
-		indent := strings.Repeat(" ", min(ansi.StringWidth(groupPrefix), max(0, wrapWidth-4)))
 		prefix := groupPrefix
 		if grouped {
-			prefix = indent
+			prefix = ""
 		}
 		content := messageText(item)
 		if m.config.Layout.Style == "editor" {
 			if !grouped {
-				lines = append(lines, strings.Split(ansi.Hardwrap("// "+strings.TrimSpace(groupPrefix), wrapWidth, true), "\n")...)
+				appendLines("// " + strings.TrimSpace(groupPrefix))
 			}
 			prefix = ""
-			indent = ""
 		}
-		content = strings.ReplaceAll(content, "\n", "\n"+indent)
-		lines = append(lines, strings.Split(ansi.Hardwrap(prefix+content, wrapWidth, true), "\n")...)
+		appendLines(prefix + content)
 	}
-	if gutter > 0 {
-		for i, line := range lines {
-			lines[i] = fmt.Sprintf("%4d  %s", i+1, line)
+	if m.chatScrolling {
+		index := min(m.messageIndex, len(positions)-1)
+		end := len(lines) - 1
+		if index+1 < len(positions) {
+			end = positions[index+1] - 1
 		}
+		target = min(positions[index]+m.chatOffset, end)
 	}
-	return lines, target
+	return chatLayout{lines, target, positions, logical}
 }
 func editorLines(e editor, prefix string, width int) ([]string, int) {
 	before := prefix + string(e.text[:e.cursor])
@@ -942,6 +1068,16 @@ func editorLines(e editor, prefix string, width int) ([]string, int) {
 	return strings.Split(ansi.Hardwrap(text, width, true), "\n"), len(beforeLines) - 1
 }
 func (m *model) View() tea.View {
+	view, _ := m.viewFrame()
+	return view
+}
+
+type chatFrame struct {
+	layout        chatLayout
+	start, height int
+}
+
+func (m *model) viewFrame() (tea.View, *chatFrame) {
 	input, cursor := editorLines(m.draft, "> ", m.width)
 	if m.entry != "" {
 		prefix := ":"
@@ -953,7 +1089,7 @@ func (m *model) View() tea.View {
 	if m.showConfig {
 		input, cursor = []string{m.configStatus}, 0
 		if m.configStatus == "" {
-			input[0] = "j/k 이동 · h/l 변경 · Ctrl-S 저장 · Esc 취소"
+			input[0] = m.tr("j/k move · h/l change · Ctrl-S save · Esc cancel")
 		}
 	}
 	if m.slash.open {
@@ -963,7 +1099,7 @@ func (m *model) View() tea.View {
 		}
 		input, cursor = editorLines(m.slash.input, prefix, m.width)
 		if m.slash.command != nil && m.slash.option() == nil {
-			input, cursor = []string{"Ctrl-S: 실행 · Esc: 이전 인자"}, 0
+			input, cursor = []string{m.tr("Ctrl-S: run · Esc: previous argument")}, 0
 		}
 	}
 	metaHeight := 0
@@ -972,7 +1108,7 @@ func (m *model) View() tea.View {
 	}
 	typingText := m.typingLabel(time.Now())
 	if m.slash.open {
-		typingText = m.slash.hint()
+		typingText = m.slash.hint(m.config.Behavior.Language)
 	}
 	typingHeight := 0
 	if typingText != "" {
@@ -993,12 +1129,11 @@ func (m *model) View() tea.View {
 	input = input[inputStart : inputStart+inputHeight]
 	bodyHeight := max(1, m.height-inputHeight-gapHeight-metaHeight-typingHeight-connectionHeight)
 	body, target := m.body()
+	var native *chatFrame
 	start := max(0, min(target-bodyHeight+1, len(body)-bodyHeight))
-	if !m.showHelp && !m.showConfig && !m.slash.open && m.screen == "chat" && m.unreadPinned {
-		start = max(0, min(target, len(body)-bodyHeight))
-	}
-	if !m.showHelp && !m.showConfig && !m.slash.open && !m.unreadPinned && m.screen == "chat" && m.messageIndex == len(m.messages)-1 {
-		start = max(0, len(body)-bodyHeight)
+	if !m.showHelp && !m.showConfig && !m.slash.open && m.screen == "chat" {
+		start = m.chatBodyStart(bodyHeight, len(body), target)
+		native = &chatFrame{m.layoutChat(), start, bodyHeight}
 	}
 	visible := append([]string{}, body[start:min(len(body), start+bodyHeight)]...)
 	for len(visible) < bodyHeight {
@@ -1023,12 +1158,19 @@ func (m *model) View() tea.View {
 	}
 	location := singleLine(m.guild.Name)
 	if m.channel.ID != "" {
-		location += " / #" + singleLine(m.channel.Name)
+		if m.channel.Type == 1 || m.channel.Type == 3 {
+			location = "DM / " + singleLine(m.dmName(m.channel))
+		} else {
+			location += " / #" + singleLine(m.channel.Name)
+		}
 	}
 	if location == "" {
 		location = m.screen
 	}
-	meta := fmt.Sprintf("%s · %s · %s · %s", mode, location, singleLine(m.connection), singleLine(m.status))
+	meta := fmt.Sprintf("%s · %s · %s · %s", mode, location, singleLine(m.tr(m.connection)), singleLine(m.tr(m.status)))
+	if symbols := m.activitySymbols(); symbols != "" {
+		meta = fmt.Sprintf("%s · %s · %s · %s · %s", mode, symbols, location, singleLine(m.tr(m.connection)), singleLine(m.tr(m.status)))
+	}
 	if m.config.Layout.ShowMetadata {
 		visible = append(visible, "\x1b[90m"+ansi.Truncate(meta, m.width, "")+"\x1b[0m")
 	}
@@ -1043,5 +1185,5 @@ func (m *model) View() tea.View {
 	view.KeyboardEnhancements.ReportAlternateKeys = true
 	view.KeyboardEnhancements.ReportAllKeysAsEscapeCodes = true
 	view.KeyboardEnhancements.ReportAssociatedText = true
-	return view
+	return view, native
 }

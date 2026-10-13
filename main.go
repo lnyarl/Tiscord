@@ -9,22 +9,21 @@ import (
 	"path/filepath"
 	"runtime"
 
-	tea "charm.land/bubbletea/v2"
 	"golang.org/x/term"
 )
 
-const tokenInstructions = `Discord 개인 계정 토큰 확인 방법 (Chrome / Edge 기준)
+const tokenInstructions = `Finding your Discord account token (Chrome / Edge)
 
-1. 브라우저에서 https://discord.com/app 에 접속해 본인 계정으로 로그인하세요.
-2. 개발자 도구를 여세요.
+1. Open https://discord.com/app in your browser and sign in to your account.
+2. Open Developer Tools.
    Windows / Linux: Ctrl+Shift+I    macOS: Cmd+Option+I
-3. Network(네트워크) 탭에서 Fetch/XHR를 선택한 뒤 Discord 채널을 이동하세요.
-4. 목록에서 messages 요청처럼 주소가 https://discord.com/api/ 로 시작하는 요청을 선택하세요.
-5. Headers → Request Headers → authorization 항목의 값만 복사하세요.
-   authorization:이라는 항목 이름이나 따옴표는 복사하지 마세요.
+3. In the Network tab, select Fetch/XHR and switch Discord channels.
+4. Select a request under https://discord.com/api/, such as a messages request.
+5. Under Headers → Request Headers, copy only the authorization value.
+   Do not include the authorization: label or quotation marks.
 
-토큰을 아래에 붙여넣고 Enter를 누르세요. 입력 내용은 화면에 표시되지 않습니다.
-토큰은 계정에 접근할 수 있는 비밀 값이므로 다른 사람에게 공유하지 마세요.`
+Paste the token below and press Enter. Your input will be hidden.
+The token grants access to your account. Do not share it.`
 
 func main() {
 	demo := flag.Bool("demo", false, "Offline preview, without a token or network access")
@@ -76,9 +75,9 @@ func main() {
 				return "", fmt.Errorf("Use an interactive terminal for hidden token input, or set DISCORD_TOKEN")
 			}
 			fmt.Println()
-			fmt.Println(tokenInstructions)
-			fmt.Println("저장 위치:", path, "(다음 실행부터 자동으로 읽습니다)")
-			fmt.Print("\nDiscord 토큰: ")
+			fmt.Println(localize(settings.Behavior.Language, tokenInstructions))
+			fmt.Println(localize(settings.Behavior.Language, "Save location:"), path, localize(settings.Behavior.Language, "(loaded automatically on subsequent runs)"))
+			fmt.Print(localize(settings.Behavior.Language, "\nDiscord token: "))
 			data, err := term.ReadPassword(int(os.Stdin.Fd()))
 			fmt.Println()
 			if err != nil {
@@ -101,7 +100,7 @@ func main() {
 	ui.config = settings
 	ui.configPath = *settingsPath
 	ui.logLevel = &logLevel
-	_, err = tea.NewProgram(ui, tea.WithContext(ctx)).Run()
+	err = runTerminalUI(ctx, ui, os.Stdout)
 	cancel()
 	if gatewayDone != nil {
 		<-gatewayDone

@@ -8,18 +8,19 @@ import (
 )
 
 var commands = []struct{ name, description string }{
-	{"?", "명령어 목록과 설명 보기"},
-	{"help", "명령어 목록과 설명 보기 (:?와 동일)"},
-	{"channels", "선택한 서버의 채널 목록으로 이동 (서버 선택 필요)"},
-	{"servers", "서버 목록으로 이동"},
-	{"send", "작성 중인 메시지 전송 (채팅 화면에서 사용)"},
-	{"older", "이전 메시지 불러오기 (채팅 화면에서 사용)"},
-	{"sync", "현재 채널 기록 다시 동기화 (연결된 채팅 화면에서 사용)"},
-	{"layout", "plain/log/editor 형식 순환 또는 :layout 형식명으로 선택 (자동 저장)"},
-	{"config", "설정 화면 열기 · j/k 이동 · h/l 변경 · Ctrl-S 저장 · Esc 취소"},
-	{"slash", "Discord 봇 슬래시 명령 입력 도우미 열기 (채팅 화면에서 /와 동일)"},
-	{"q", "프로그램 종료"},
-	{"quit", "프로그램 종료 (:q와 동일)"},
+	{"?", "Show available commands and descriptions"},
+	{"help", "Show available commands (same as :?)"},
+	{"channels", "Open the selected server's channels or the current DM list"},
+	{"servers", "Open the server list"},
+	{"dm", "Open DM and group DM list · Enter to open a conversation"},
+	{"send", "Send the draft (chat screen)"},
+	{"older", "Load older messages (chat screen)"},
+	{"sync", "Resync current channel history (connected chat screen)"},
+	{"layout", "Cycle plain/log/editor or use :layout style (saved automatically)"},
+	{"config", "Open settings · j/k move · h/l change · Ctrl-S save · Esc cancel"},
+	{"slash", "Open Discord slash command helper (same as / in chat)"},
+	{"q", "Quit"},
+	{"quit", "Quit (same as :q)"},
 }
 
 func (m *model) completeCommand(direction int) {
@@ -56,11 +57,11 @@ func (m *model) completeCommand(direction int) {
 }
 
 func (m *model) helpLines() []string {
-	rows := []string{"사용 가능한 명령어", "Esc / Enter: 돌아가기 · j/k: 스크롤", ""}
+	rows := []string{m.tr("Available commands"), m.tr("Esc / Enter: return · j/k: scroll"), ""}
 	for _, command := range commands {
-		rows = append(rows, fmt.Sprintf("  :%-8s %s", command.name, command.description))
+		rows = append(rows, fmt.Sprintf("  :%-8s %s", command.name, m.tr(command.description)))
 	}
-	rows = append(rows, "", "명령 입력 중 Tab: 다음 후보 · Shift-Tab: 이전 후보", "입력한 접두어에 맞는 명령만 순환합니다. 예: :s → :servers → :send")
+	rows = append(rows, "", m.tr("Chat Insert: Enter sends · Ctrl/Shift-Enter adds a newline · Ctrl-J fallback"), m.tr("Normal mode Ctrl-O: chat → channel/DM list → server list"), m.tr("Command entry Tab: next match · Shift-Tab: previous match"), m.tr("Cycle commands matching the prefix. Example: :s → :servers → :send"))
 	var lines []string
 	for _, row := range rows {
 		lines = append(lines, strings.Split(ansi.Hardwrap(row, m.width, true), "\n")...)

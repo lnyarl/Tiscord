@@ -43,7 +43,7 @@ func (m *model) startSync() tea.Cmd {
 	}
 	m.syncRequired = true
 	m.busy = "sync"
-	m.status = "메시지 복구 중"
+	m.status = m.tr("Recovering messages")
 	m.pending = nil
 	id, epoch := m.channel.ID, m.connectionEpoch
 	ready := m.watchReady
@@ -85,19 +85,19 @@ func (m *model) connectionHint() string {
 		return ""
 	}
 	if m.gatewayStopped {
-		return "연결 종료 · 전송 불가 (앱을 다시 실행하세요)"
+		return m.tr("Connection stopped · sending unavailable (restart the app)")
 	}
 	if !m.gatewayOnline {
 		if m.hadConnection {
-			return "연결 끊김 · 재연결 중 · 전송 불가"
+			return m.tr("Disconnected · reconnecting · sending unavailable")
 		}
-		return "연결 중 · 전송 불가"
+		return m.tr("Connecting · sending unavailable")
 	}
 	if m.syncRequired {
 		if m.busy == "sync" {
-			return "메시지 복구 중 · 전송 불가"
+			return m.tr("Recovering messages · sending unavailable")
 		}
-		return "메시지 복구 필요 · 전송 불가 (:sync로 재시도)"
+		return m.tr("Message recovery needed · sending unavailable (retry with :sync)")
 	}
 	return ""
 }

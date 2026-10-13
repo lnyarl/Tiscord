@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -66,6 +65,14 @@ func (m *model) receiveTyping(event gatewayEvent, now time.Time) tea.Cmd {
 		name = data.Member.Nick
 	}
 	if name == "" {
+		for _, user := range m.channel.Recipients {
+			if user.ID == data.UserID {
+				name = m.config.authorName(user)
+				break
+			}
+		}
+	}
+	if name == "" {
 		for i := len(m.messages) - 1; i >= 0; i-- {
 			user := m.messages[i].Author
 			if user.ID == data.UserID {
@@ -75,7 +82,7 @@ func (m *model) receiveTyping(event gatewayEvent, now time.Time) tea.Cmd {
 		}
 	}
 	if name == "" {
-		name = "사용자 " + data.UserID
+		name = m.tr("User ") + data.UserID
 	}
 	m.typists[data.UserID] = typist{singleLine(name), expires}
 	appLog.Debug("ui.typing_started", "channel_id", data.ChannelID, "user_id", data.UserID, "active", len(m.typists))
@@ -97,7 +104,10 @@ func (m *model) typingLabel(now time.Time) string {
 		return ""
 	}
 	if len(names) > 2 {
-		return fmt.Sprintf("%s 외 %d명 입력 중…", strings.Join(names[:2], ", "), len(names)-2)
+		return m.tr("%s and %d more are typing…", strings.Join(names[:2], ", "), len(names)-2)
 	}
-	return strings.Join(names, ", ") + " 입력 중…"
+	if len(names) == 1 {
+		return m.tr("%s is typing…", names[0])
+	}
+	return m.tr("%s are typing…", strings.Join(names, ", "))
 }

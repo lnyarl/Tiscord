@@ -83,15 +83,40 @@ func TestEditorLayoutWrapsWithoutLosingText(t *testing.T) {
 	m.width = 30
 	m.messages[0].Content = strings.Repeat("한글", 30)
 	lines, _ := m.body()
-	count := 0
+	var text strings.Builder
 	for _, line := range lines {
 		if ansi.StringWidth(line) > m.width {
 			t.Fatal("editor gutter broke wrapping")
 		}
-		count += strings.Count(line, "한글")
+		text.WriteString(ansi.Strip(line))
 	}
-	if count != 30 {
+	if strings.Count(text.String(), "한글") != 30 {
 		t.Fatal("editor wrapping lost message content")
+	}
+}
+
+func TestEditorNumbersLogicalLinesAcrossResizes(t *testing.T) {
+	m := openDemo(t)
+	m.config.Layout.Style = "editor"
+	link := "https://example.com/" + strings.Repeat("long-path/", 10) + "?value=123"
+	m.messages[0].Content = link + "\nnext line"
+	for _, width := range []int{25, 60} {
+		m.width = width
+		lines, _ := m.body()
+		for _, row := range lines {
+			if ansi.StringWidth(row) > width {
+				t.Fatal("wrapped line exceeds terminal width")
+			}
+		}
+		layout := m.layoutChat()
+		if len(layout.logical) != 3 || ansi.Strip(layout.logical[1].text) != "   2  "+link || ansi.Strip(layout.logical[2].text) != "   3  next line" {
+			t.Fatal("resize changed logical numbering or text")
+		}
+		for i, logical := range layout.logical {
+			if !strings.HasPrefix(ansi.Strip(logical.text), fmt.Sprintf("%4d  ", i+1)) {
+				t.Fatal("logical line number missing")
+			}
+		}
 	}
 }
 
@@ -142,7 +167,7 @@ func TestLayoutSelectionPersistsAndPreservesOtherSettings(t *testing.T) {
 		if saved.Layout.Style != m.config.Layout.Style || saved.Layout.AuthorName != "display" || saved.Layout.ShowTyping || saved.Behavior.SendKey != "enter" || saved.Logging.Level != "warn" {
 			t.Fatalf("selected layout or other settings lost: %+v", saved)
 		}
-		if !strings.Contains(m.status, "저장됨") {
+		if !strings.Contains(m.status, "saved") {
 			t.Fatal("save success not shown")
 		}
 	}
@@ -162,7 +187,7 @@ func TestLayoutSaveFailureKeepsSelectionAndReportsError(t *testing.T) {
 	m := openDemo(t)
 	m.configPath = filepath.Join(t.TempDir(), "missing.json")
 	m.execute("layout log")
-	if m.config.Layout.Style != "log" || !strings.Contains(m.status, "설정 저장 실패") {
+	if m.config.Layout.Style != "log" || !strings.Contains(m.status, "could not save settings") {
 		t.Fatal("failed save did not retain current layout and report error")
 	}
 }

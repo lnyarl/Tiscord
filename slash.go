@@ -106,7 +106,7 @@ func (c *restClient) Commands(ctx context.Context, guildID, channelID string) ([
 			return nil, err
 		}
 		if index.Commands == nil {
-			return nil, errors.New("명령 목록 준비 중 · 잠시 후 /로 다시 열어주세요")
+			return nil, errors.New("Commands are being prepared · reopen with / shortly")
 		}
 		names := make(map[string]string)
 		for _, app := range index.Applications {
@@ -140,9 +140,9 @@ func (c *restClient) Interact(ctx context.Context, request interactionRequest) e
 	return c.request(ctx, "POST", "/interactions", request, nil)
 }
 func (c *demoClient) Commands(context.Context, string, string) ([]slashCommand, error) {
-	root := appCommand{ID: "demo-command", ApplicationID: "demo-app", Version: "1", Name: "demo", Type: 1, Description: "오프라인 입력 도우미", Options: []slashOption{
-		{Name: "text", Type: 3, Required: true, Description: "표시할 텍스트"},
-		{Name: "style", Type: 3, Description: "형식", Choices: []slashChoice{{Name: "짧게", Value: "short"}, {Name: "길게", Value: "long"}}},
+	root := appCommand{ID: "demo-command", ApplicationID: "demo-app", Version: "1", Name: "demo", Type: 1, Description: "Offline command helper", Options: []slashOption{
+		{Name: "text", Type: 3, Required: true, Description: "Text to display"},
+		{Name: "style", Type: 3, Description: "Style", Choices: []slashChoice{{Name: "Short", Value: "short"}, {Name: "Long", Value: "long"}}},
 	}}
 	return flattenCommands(root, nil, root.Options, "Demo bot"), nil
 }
@@ -151,41 +151,41 @@ func (c *demoClient) Interact(context.Context, interactionRequest) error { retur
 func optionValue(option slashOption, text string) (any, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
-		return nil, errors.New("값을 입력해주세요")
+		return nil, errors.New("Enter a value")
 	}
 	var value any
 	switch option.Type {
 	case 3:
 		length := len(utf16.Encode([]rune(text)))
 		if option.MinLength != nil && length < *option.MinLength || option.MaxLength != nil && length > *option.MaxLength {
-			return nil, errors.New("문자열 길이 범위를 벗어났습니다")
+			return nil, errors.New("String length is outside the allowed range")
 		}
 		value = text
 	case 4, 10:
 		number, err := strconv.ParseFloat(text, 64)
 		if err != nil || math.IsNaN(number) || math.IsInf(number, 0) {
-			return nil, errors.New("숫자를 입력해주세요")
+			return nil, errors.New("Enter a number")
 		}
 		if option.Type == 4 && (math.Trunc(number) != number || math.Abs(number) > 9007199254740991) {
-			return nil, errors.New("유효한 정수를 입력해주세요")
+			return nil, errors.New("Enter a valid integer")
 		}
 		if option.MinValue != nil && number < *option.MinValue || option.MaxValue != nil && number > *option.MaxValue {
-			return nil, errors.New("숫자 범위를 벗어났습니다")
+			return nil, errors.New("Number is outside the allowed range")
 		}
 		value = number
 	case 5:
 		if text != "true" && text != "false" {
-			return nil, errors.New("true 또는 false를 입력해주세요")
+			return nil, errors.New("Enter true or false")
 		}
 		value = text == "true"
 	case 6, 7, 8, 9:
 		id := strings.Trim(text, "<@!#&>")
 		if number, err := strconv.ParseUint(id, 10, 64); err != nil || number == 0 {
-			return nil, errors.New("사용자·채널·역할의 숫자 ID를 입력해주세요")
+			return nil, errors.New("Enter a numeric user, channel or role ID")
 		}
 		value = id
 	default:
-		return nil, errors.New("첨부파일 인자는 아직 지원하지 않습니다")
+		return nil, errors.New("Attachment arguments are not supported")
 	}
 	if len(option.Choices) > 0 {
 		for _, choice := range option.Choices {
@@ -193,7 +193,7 @@ func optionValue(option slashOption, text string) (any, error) {
 				return value, nil
 			}
 		}
-		return nil, errors.New("제공된 선택지를 골라주세요")
+		return nil, errors.New("Select one of the provided choices")
 	}
 	return value, nil
 }

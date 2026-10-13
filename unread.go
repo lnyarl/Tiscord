@@ -80,7 +80,7 @@ func (m *model) markRead() tea.Cmd {
 		return nil
 	}
 	if !m.gatewayOnline || m.gatewayStopped || m.syncRequired {
-		m.status = "연결 복구 후 읽음 처리가 가능합니다"
+		m.status = m.tr("Read marking is available after reconnection")
 		return nil
 	}
 	id := m.messages[m.messageIndex].ID
@@ -104,7 +104,7 @@ func (m *model) markReadID(channelID, id string) tea.Cmd {
 		return nil
 	}
 	m.readPending[channelID] = id
-	m.status = "읽음 위치 저장 중"
+	m.status = m.tr("Saving read position")
 	return func() tea.Msg { return readMarked{channelID, id, client.MarkRead(m.ctx, channelID, id)} }
 }
 func (m *model) receiveReadState(event gatewayEvent) bool {
@@ -147,6 +147,8 @@ func (m *model) firstUnread() int {
 	return -1
 }
 func (m *model) restoreUnread() {
+	m.chatScrolling = false
+	m.chatOffset = 0
 	if m.unreadBoundary == "0" {
 		m.unreadBoundary = ""
 	}

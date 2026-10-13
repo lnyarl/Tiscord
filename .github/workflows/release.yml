@@ -46,7 +46,10 @@ jobs:
             Where-Object { $_.Name -match '\.(zip|tar\.gz)$' -or $_.Name -eq 'SHA256SUMS.txt' } |
             ForEach-Object { $_.FullName }
           if ($assets.Count -ne 6) { throw 'Expected five archives and checksums' }
-          $releaseArgs = @('release', 'create', $tag, '--verify-tag', '--draft', '--generate-notes', '--title', "Tiscord $tag")
+          $releaseArgs = @('release', 'create', $tag, '--verify-tag', '--draft', '--title', "Tiscord $tag")
+          $notesPath = ".github/release-notes/$tag.md"
+          if (Test-Path -LiteralPath $notesPath) { $releaseArgs += @('--notes-file', $notesPath) }
+          else { $releaseArgs += '--generate-notes' }
           if ($tag.Contains('-')) { $releaseArgs += '--prerelease' }
           gh @releaseArgs @assets
           if ($LASTEXITCODE -ne 0) { throw 'Release creation or asset upload failed' }

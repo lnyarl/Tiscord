@@ -1,8 +1,9 @@
 {
   "behavior": {
+    "language": "en",
     "group_messages": true,
     "group_window_seconds": 300,
-    "send_key": "ctrl+s",
+    "send_key": "enter",
     "start_mode": "normal",
     "korean_shortcuts": true,
     "restore_unread": true
@@ -16,7 +17,8 @@
     "input_max_lines": 3,
     "input_gap_lines": 1,
     "show_metadata": true,
-    "show_typing": true
+    "show_typing": true,
+    "show_activity": true
   },
   "logging": {
     "level": "debug"

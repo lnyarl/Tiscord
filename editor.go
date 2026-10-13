@@ -28,6 +28,10 @@ func (e *editor) remove(start, end int) {
 	e.cursor = start
 }
 func (e *editor) key(key tea.KeyPressMsg, multiline bool) {
+	if multiline && key.Code == tea.KeyEnter && key.Mod&(tea.ModCtrl|tea.ModShift) != 0 && key.Mod&(tea.ModAlt|tea.ModSuper) == 0 {
+		e.insert([]rune{'\n'})
+		return
+	}
 	if key.Text != "" && key.Mod&(tea.ModCtrl|tea.ModAlt|tea.ModSuper) == 0 {
 		e.insert([]rune(clean(key.Text)))
 		return
@@ -35,7 +39,7 @@ func (e *editor) key(key tea.KeyPressMsg, multiline bool) {
 	switch keyName(key) {
 	case "space":
 		e.insert([]rune{' '})
-	case "enter", "ctrl+j":
+	case "enter", "ctrl+j", "ctrl+enter", "shift+enter":
 		if multiline {
 			e.insert([]rune{'\n'})
 		}

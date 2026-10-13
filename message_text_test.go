@@ -52,6 +52,39 @@ func TestEmbedUpdatesPreserveAndReplaceData(t *testing.T) {
 	}
 }
 
+func TestWrappedLinksKeepFullTargetsAndCloseAtEveryRow(t *testing.T) {
+	for _, text := range []string{
+		"https://example.com/" + strings.Repeat("long/", 15) + "?id=123&value=abc",
+		"before https://example.com/path_(one) and https://example.org/another-long-path after",
+		"[link](https://example.com/long-path).",
+	} {
+		rows := wrapMessageLine(text, 15)
+		var plain strings.Builder
+		for _, row := range rows {
+			plain.WriteString(ansi.Strip(row))
+			if ansi.StringWidth(row) > 15 {
+				t.Fatal("hyperlink changed wrapping width")
+			}
+			active := ""
+			for _, match := range messageHyperlink.FindAllStringSubmatch(row, -1) {
+				active = match[1]
+			}
+			if active != "" {
+				t.Fatal("hyperlink leaked into next row or gutter")
+			}
+		}
+		if plain.String() != text {
+			t.Fatal("wrapping changed link text")
+		}
+	}
+	link := "https://example.com/" + strings.Repeat("path/", 20)
+	for _, row := range wrapMessageLine(link, 15) {
+		if !strings.Contains(row, ansi.SetHyperlink(link)) || !strings.HasSuffix(row, ansi.ResetHyperlink()) {
+			t.Fatal("wrapped link lost complete URL target")
+		}
+	}
+}
+
 func TestEmbedURLsDeduplicateAndTextIsSanitized(t *testing.T) {
 	item := message{Content: "https://example.com", Attachments: []link{{URL: "https://example.com"}}, Embeds: []embed{{URL: "https://example.com", Description: "visible\x1b[2J"}}}
 	text := messageText(item)

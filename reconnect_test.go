@@ -61,11 +61,11 @@ func TestDisconnectedAndSyncingStateBlocksSendAndKeepsDraft(t *testing.T) {
 	m.hadConnection = true
 	m.draft.set("keep me")
 	m.Update(gatewayEvent{status: "Gateway disconnected; reconnecting"})
-	if m.send() != nil || m.draft.value() != "keep me" || !strings.Contains(m.View().Content, "전송 불가") {
+	if m.send() != nil || m.draft.value() != "keep me" || !strings.Contains(m.View().Content, "sending unavailable") {
 		t.Fatal("disconnected send not blocked")
 	}
 	m.config.Layout.ShowMetadata = false
-	if !strings.Contains(m.View().Content, "전송 불가") {
+	if !strings.Contains(m.View().Content, "sending unavailable") {
 		t.Fatal("connection warning disappeared with metadata hidden")
 	}
 	m.Update(gatewayEvent{status: "Gateway resumed"})

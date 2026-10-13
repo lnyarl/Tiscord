@@ -84,7 +84,7 @@ func TestConfigSaveFailureRemainsEditableAndVisible(t *testing.T) {
 	m.configKey("l")
 	m.configKey("G")
 	m.configKey("ctrl+s")
-	if !m.showConfig || m.config != original || !strings.Contains(m.View().Content, "설정 저장 실패") {
+	if !m.showConfig || m.config != original || !strings.Contains(m.View().Content, "Could not save settings") {
 		t.Fatal("failed save lost editable state or error")
 	}
 	if _, err := os.Stat(m.configPath); !os.IsNotExist(err) {
